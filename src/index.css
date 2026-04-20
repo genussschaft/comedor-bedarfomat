@@ -1,0 +1,97 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap');
+
+:root {
+  --bg: #f3ecdf;
+  --surface: rgba(255, 248, 241, 0.9);
+  --surface-strong: #fffaf4;
+  --text: #241b12;
+  --muted: #736556;
+  --accent: #800000;
+  --accent-strong: #5b0000;
+  --leaf: #6d8e58;
+  --line: rgba(36, 27, 18, 0.11);
+  --shadow: 0 24px 70px rgba(88, 57, 35, 0.14);
+  --shadow-soft: 0 16px 40px rgba(88, 57, 35, 0.1);
+  font-family: 'Manrope', sans-serif;
+  line-height: 1.5;
+  font-weight: 500;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(233, 196, 154, 0.45), transparent 34%),
+    radial-gradient(circle at 85% 10%, rgba(177, 214, 178, 0.32), transparent 24%),
+    linear-gradient(180deg, #f6efe4 0%, #efe5d7 100%);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: transparent;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(90, 64, 46, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(90, 64, 46, 0.025) 1px, transparent 1px);
+  background-size: 24px 24px;
+  mask-image: radial-gradient(circle at center, black 45%, transparent 100%);
+}
+
+a {
+  color: inherit;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+h1,
+h2,
+h3 {
+  font-family: 'Fraunces', serif;
+  line-height: 1.08;
+  letter-spacing: -0.03em;
+}
+
+h1 {
+  font-size: clamp(2.35rem, 4vw, 4.35rem);
+}
+
+h2 {
+  font-size: clamp(1.45rem, 2.2vw, 2.1rem);
+}
+
+h3 {
+  font-size: 1.1rem;
+}
+
+p {
+  margin: 0;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+::selection {
+  background: rgba(217, 108, 67, 0.22);
+}
