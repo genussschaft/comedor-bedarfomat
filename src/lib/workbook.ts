@@ -187,6 +187,12 @@ export function exportWorkbookWithPlan(
     source.config.mapping.lineTotal ??
     Math.max(source.columnCount + 2, actualColumn + 1)
 
+  ensureWorksheetRange(
+    worksheet,
+    Math.max(targetColumn, actualColumn, orderColumn, totalColumn),
+    source.products[source.products.length - 1]?.rowNumber ?? source.config.headerRow,
+  )
+
   writeHeaderCell(worksheet, source.config.headerRow, targetColumn, 'Soll')
   writeHeaderCell(worksheet, source.config.headerRow, actualColumn, 'Ist')
   writeHeaderCell(worksheet, source.config.headerRow, orderColumn, 'Bestellung')
@@ -244,9 +250,11 @@ export function exportWorkbookWithPlan(
       })
 
       if (quantity > 0) {
+        const totalValue = roundCurrency(quantity * (product.price ?? 0))
         worksheet[totalCell] = {
           t: 'n',
           f: `${priceCell}*${orderCell}`,
+          v: totalValue,
           z: '0.00',
         }
       } else {
@@ -679,6 +687,25 @@ function writeHeaderCell(
     t: 's',
     v: label,
   }
+}
+
+function ensureWorksheetRange(
+  worksheet: XLSX.WorkSheet,
+  maxColumnIndex: number,
+  maxRowNumber: number,
+) {
+  const decoded = XLSX.utils.decode_range(
+    worksheet['!ref'] ?? `A1:${XLSX.utils.encode_col(maxColumnIndex)}${maxRowNumber}`,
+  )
+
+  decoded.e.c = Math.max(decoded.e.c, maxColumnIndex)
+  decoded.e.r = Math.max(decoded.e.r, Math.max(0, maxRowNumber - 1))
+
+  worksheet['!ref'] = XLSX.utils.encode_range(decoded)
+}
+
+function roundCurrency(value: number) {
+  return Math.round(value * 100) / 100
 }
 
 function stripExtension(fileName: string) {
