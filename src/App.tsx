@@ -1454,7 +1454,11 @@ function RailStep({
   optional?: boolean
 }) {
   return (
-    <article className={`rail-step ${isReady ? 'is-ready' : ''} ${optional ? 'is-optional' : ''}`}>
+    <article
+      className={`rail-step ${
+        isReady ? 'is-ready' : optional ? 'is-optional' : ''
+      }`}
+    >
       <div className="rail-badge">
         {isReady ? 'bereit' : optional ? 'optional' : 'offen'}
       </div>
