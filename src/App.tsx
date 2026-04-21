@@ -605,7 +605,7 @@ function App() {
       <header className="hero-panel panel">
         <div className="hero-copy">
           <span className="eyebrow">Comedor Bestellwerkzeug</span>
-          <h1>ComedorBedarfomat</h1>
+          <h1>Comedor&shy;Bedarfomat</h1>
           <p className="hero-text">
             Importiere die aktuelle Bestellliste, setze Soll-Werte direkt im Katalog
             oder über die Inventur, und exportiere wieder eine Excel-Datei mit den
