@@ -1937,7 +1937,6 @@ function ProductCard({
           <h3>{row.product.name}</h3>
           <p>{row.product.producer || 'Produzent unbekannt'}</p>
         </div>
-        {row.product.category ? <span className="pill">{row.product.category}</span> : null}
       </div>
 
       <div className="product-meta">
