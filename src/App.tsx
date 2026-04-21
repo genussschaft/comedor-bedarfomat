@@ -2004,7 +2004,7 @@ function InventoryRowCard({
         <div className="inventory-badges">
           <span className="pill">{buildBulkLabel(row.product)}</span>
           <span className="pill">
-            Preis: {row.product.price !== null ? formatCurrency(row.product.price) : 'nicht erkannt'}
+            {row.product.price !== null ? formatCurrency(row.product.price) : 'nicht erkannt'}
           </span>
           {row.previousMatch ? (
             <span
