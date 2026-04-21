@@ -974,7 +974,6 @@ function App() {
 
           <div className="cart-metrics">
             <Metric label="Positionen" value={positionsAnzahl.toString()} />
-            <Metric label="Menge" value={formatQuantity(bestellMenge)} />
             <Metric label="Summe" value={formatCurrency(bestellSumme)} />
           </div>
 
