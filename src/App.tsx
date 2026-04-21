@@ -164,6 +164,7 @@ function App() {
 
           return {
             ...previous,
+            activeView: 'inventory',
             previousWorkbook: source,
           }
         })
@@ -491,7 +492,7 @@ function App() {
           <span className="eyebrow">Comedor Bestellwerkzeug</span>
           <h1>ComedorBedarfomat</h1>
           <p className="hero-text">
-            Importiere die aktuelle Bestelliste, setze Soll-Werte direkt im Katalog
+            Importiere die aktuelle Bestellliste, setze Soll-Werte direkt im Katalog
             oder über die Inventur, und exportiere wieder eine Excel-Datei mit den
             Spalten <strong>Soll</strong>, <strong>Ist</strong> und <strong>Bestellung</strong>.
           </p>
@@ -505,7 +506,7 @@ function App() {
             >
               {busyState.aktuellerImport
                 ? 'Aktuelle Liste wird importiert...'
-                : 'Aktuelle Bestelliste importieren'}
+                : 'Aktuelle Bestellliste importieren'}
             </button>
             <button
               className="button button-secondary"
@@ -515,7 +516,7 @@ function App() {
             >
               {busyState.vorherigerImport
                 ? 'Vorherige Liste wird importiert...'
-                : 'Vorherige Bestelliste importieren'}
+                : 'Vorherige Bestellliste importieren'}
             </button>
             <button
               className="button button-ghost"
@@ -565,13 +566,13 @@ function App() {
       <section className="wizard-rail">
         <RailStep
           title="1. Import"
-          description="Aktuelle Bestelliste laden und optional die vorige Runde dazunehmen."
+          description="Aktuelle Bestellliste laden."
           isReady={Boolean(appState.currentWorkbook)}
         />
         <RailStep
           title="2. Inventur machen"
-          description="Soll-Werte direkt im Katalog oder gesammelt in der Inventur setzen."
-          isReady={planModel.sollCount > 0}
+          description="Vorherige Bestellliste importieren, um Soll- und Ist-Werte automatisch zu übernehmen."
+          isReady={appState.previousWorkbook !== null}
           optional
         />
         <RailStep
@@ -590,7 +591,7 @@ function App() {
 
       <section className="import-grid">
         <ImportCard
-          title="Aktuelle Bestelliste"
+          title="Aktuelle Bestellliste"
           subtitle="Diese Datei bestimmt Katalog, Export und Bestellübersicht."
           source={appState.currentWorkbook}
           busy={busyState.aktuellerImport}
@@ -636,15 +637,15 @@ function App() {
             </>
           ) : (
             <p className="empty-copy">
-              Ziehe die aktuelle Comedor-Bestelliste hier hinein oder wähle sie aus.
+              Ziehe die aktuelle Comedor-Bestellliste hier hinein oder wähle sie aus.
               Die App erkennt die echte Beispielstruktur mit der Kopfzeile in Zeile 16.
             </p>
           )}
         </ImportCard>
 
         <ImportCard
-          title="Vorherige Bestelliste"
-          subtitle="Optional für automatische Soll-Vorschläge in der Inventur."
+          title="Vorherige Bestellliste"
+          subtitle="Optional für automatische Vorschläge in der Inventur."
           source={appState.previousWorkbook}
           busy={busyState.vorherigerImport}
           onSelectFile={() => vorherigerInputRef.current?.click()}
@@ -949,7 +950,7 @@ function App() {
             )
           ) : (
             <EmptyState
-              title="Bitte zuerst die aktuelle Bestelliste importieren"
+              title="Bitte zuerst die aktuelle Bestellliste importieren"
               description="Danach wird hier der Katalog mit Soll-Eingabe und Inventuransicht angezeigt."
             />
           )}
@@ -1455,7 +1456,7 @@ function RailStep({
   return (
     <article className={`rail-step ${isReady ? 'is-ready' : ''} ${optional ? 'is-optional' : ''}`}>
       <div className="rail-badge">
-        {optional ? 'optional' : isReady ? 'bereit' : 'offen'}
+        {isReady ? 'bereit' : optional ? 'optional' : 'offen'}
       </div>
       <h3>{title}</h3>
       <p>{description}</p>
