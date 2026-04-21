@@ -614,26 +614,6 @@ function App() {
 
           <div className="hero-actions">
             <button
-              className="button button-primary"
-              type="button"
-              onClick={() => void loadCurrentCatalogFromComedor()}
-              disabled={busyState.aktuellerImport}
-            >
-              {busyState.aktuellerImport
-                ? 'Bestellliste wird geladen...'
-                : 'Bestellliste direkt laden'}
-            </button>
-            <button
-              className="button button-secondary"
-              type="button"
-              onClick={() => vorherigerInputRef.current?.click()}
-              disabled={busyState.vorherigerImport}
-            >
-              {busyState.vorherigerImport
-                ? 'Vorherige Liste wird importiert...'
-                : 'Vorherige Bestellliste importieren'}
-            </button>
-            <button
               className="button button-ghost"
               type="button"
               onClick={() => void clearSavedWorkspace()}
@@ -1742,7 +1722,7 @@ function ImportCard({
               onClick={onLoadDirect}
               disabled={busy}
             >
-              {busy ? 'Laden...' : 'Direkt laden'}
+              {busy ? 'Laden...' : source ? 'Erneut laden' : 'Direkt laden'}
             </button>
           ) : null}
           <button
@@ -1754,7 +1734,7 @@ function ImportCard({
             onClick={onSelectFile}
             disabled={busy}
           >
-            {busy ? 'Bitte warten...' : 'Hochladen'}
+            {busy ? 'Bitte warten...' : source ? 'Ersetzen' : 'Hochladen'}
           </button>
         </div>
       </div>
