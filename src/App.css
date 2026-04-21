@@ -1,10 +1,13 @@
 .app-shell {
   width: min(1380px, calc(100vw - 32px));
+  max-width: 100%;
   margin: 0 auto;
   padding: 28px 0 56px;
+  overflow-x: clip;
 }
 
 .panel {
+  max-width: 100%;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 28px;
@@ -20,8 +23,21 @@
   padding: 32px;
 }
 
+.hero-copy,
+.stats-grid,
+.stat-card,
+.rail-step,
+.upload-card,
+.workspace-panel,
+.cart-panel,
+.product-card,
+.inventory-row {
+  min-width: 0;
+}
+
 .hero-copy h1 {
   margin: 10px 0 14px;
+  overflow-wrap: anywhere;
 }
 
 .hero-text {
@@ -177,6 +193,10 @@
   gap: 16px;
 }
 
+.panel-head > * {
+  min-width: 0;
+}
+
 .panel-head h2,
 .panel-head h3 {
   margin: 8px 0 0;
@@ -250,6 +270,26 @@
 .catalog-controls {
   display: grid;
   gap: 14px;
+}
+
+.import-actions {
+  display: grid;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.import-actions.has-direct-load {
+  grid-template-columns: repeat(1, minmax(140px, 1fr));
+  width: min(340px, 100%);
+}
+
+.import-actions.has-single-action {
+  grid-template-columns: minmax(140px, 1fr);
+  width: min(180px, 100%);
+}
+
+.import-actions .button {
+  width: 100%;
 }
 
 .mapping-grid {
@@ -444,14 +484,6 @@
   font-size: 0.94rem;
 }
 
-.quantity-stepper {
-  display: grid;
-  grid-template-columns: 48px minmax(0, 1fr) 48px;
-  gap: 10px;
-  align-items: end;
-}
-
-.qty-button,
 .button {
   border: 0;
   cursor: pointer;
@@ -462,41 +494,8 @@
     opacity 160ms ease;
 }
 
-.qty-button {
-  height: 52px;
-  border-radius: 16px;
-  background: rgba(34, 28, 24, 0.08);
-  color: var(--text);
-  font-size: 1.2rem;
-}
-
-.qty-button:hover,
 .button:hover {
   transform: translateY(-1px);
-}
-
-.qty-field {
-  display: grid;
-  gap: 8px;
-}
-
-.qty-field span {
-  font-size: 0.84rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.qty-input {
-  width: 100%;
-  min-height: 52px;
-  border-radius: 16px;
-  border: 1px solid rgba(36, 27, 18, 0.12);
-  background: rgba(255, 252, 248, 0.96);
-  padding: 12px 14px;
-  box-sizing: border-box;
-  font-size: 1rem;
 }
 
 .product-footer {
@@ -550,6 +549,21 @@
   gap: 16px;
 }
 
+.inventory-section-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.inventory-add-toggle {
+  min-height: 42px;
+  padding-block: 9px;
+}
+
+.inventory-add-hint {
+  max-width: 72ch;
+}
+
 .inventory-section-head h3 {
   margin: 8px 0 0;
 }
@@ -583,10 +597,15 @@
   align-items: end;
 }
 
-.order-input-row {
+.number-control-with-addon {
   display: flex;
   gap: 8px;
   align-items: stretch;
+  min-width: 0;
+}
+
+.number-control {
+  flex: 1;
   min-width: 0;
 }
 
@@ -628,6 +647,10 @@
   font-size: 0.86rem;
   font-weight: 900;
   line-height: 1;
+}
+
+.stepper-button-mobile {
+  display: none;
 }
 
 .stepper-button + .stepper-button {
@@ -763,10 +786,26 @@
 
 .cart-total {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 16px;
   font-size: 1.05rem;
+  min-width: 0;
+}
+
+.cart-footer {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cart-footer .helper-copy,
+.cart-total span,
+.cart-total strong {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .empty-state {
@@ -786,10 +825,11 @@
   min-height: 48px;
   border-radius: 16px;
   padding: 12px 18px;
+  max-width: 100%;
+  white-space: normal;
 }
 
 .button:disabled,
-.qty-button:disabled,
 .auto-button:disabled {
   cursor: not-allowed;
   opacity: 0.58;
@@ -865,6 +905,7 @@
 
   .cart-panel {
     position: static;
+    max-height: none;
   }
 
   .mapping-fields {
@@ -908,7 +949,7 @@
 
 @media (max-width: 720px) {
   .app-shell {
-    width: min(100vw - 20px, 100%);
+    width: min(100dvw - 16px, 100%);
     padding-top: 16px;
   }
 
@@ -916,7 +957,54 @@
   .workspace-panel,
   .cart-panel,
   .upload-card {
-    padding: 20px;
+    padding: 18px;
+    border-radius: 22px;
+  }
+
+  .hero-panel {
+    gap: 16px;
+  }
+
+  .hero-copy h1 {
+    font-size: clamp(2rem, 13vw, 2.8rem);
+  }
+
+  .hero-text {
+    max-width: 100%;
+    font-size: 0.96rem;
+  }
+
+  .hero-actions,
+  .import-actions,
+  .import-actions.has-direct-load,
+  .import-actions.has-single-action {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .stat-card {
+    min-height: 86px;
+    border-radius: 18px;
+    padding: 12px;
+  }
+
+  .stat-card span {
+    font-size: 0.78rem;
+  }
+
+  .wizard-rail {
+    gap: 10px;
+  }
+
+  .rail-step {
+    min-height: auto;
+    padding: 14px;
   }
 
   .hero-actions,
@@ -933,5 +1021,43 @@
 
   .tab-button {
     flex: 1;
+  }
+
+  .number-control-with-addon {
+    display: flex;
+  }
+
+  .number-control {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
+    gap: 8px;
+  }
+
+  .number-stepper-input {
+    padding-right: 14px;
+    text-align: center;
+  }
+
+  .number-stepper-actions {
+    display: none;
+  }
+
+  .stepper-button-mobile {
+    display: block;
+    min-height: 50px;
+    border: 1px solid rgba(36, 27, 18, 0.1);
+    border-radius: 16px;
+    background: rgba(34, 28, 24, 0.08);
+    font-size: 1.05rem;
+  }
+
+  .auto-button {
+    padding-inline: 10px;
+  }
+
+  .inventory-section-controls {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
   }
 }

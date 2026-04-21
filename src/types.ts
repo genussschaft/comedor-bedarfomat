@@ -93,8 +93,10 @@ export interface WorkbookSource {
 
 export interface InventoryDraft {
   target?: string
+  lastTarget?: string
   actual?: string
   order?: string
+  inInventory?: boolean
 }
 
 export interface PersistedFilters {

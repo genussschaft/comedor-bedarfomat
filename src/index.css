@@ -32,6 +32,8 @@
 
 html {
   scroll-behavior: smooth;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 body {
@@ -39,6 +41,8 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background: transparent;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 body::before {
@@ -90,6 +94,8 @@ p {
 
 #root {
   min-height: 100vh;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 ::selection {

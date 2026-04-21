@@ -54,6 +54,7 @@ interface PlanRow {
   actualInput: string
   orderInput: string
   hasOrderOverride: boolean
+  inInventory: boolean
 }
 
 interface PlanModel {
@@ -72,6 +73,9 @@ interface ProductIndex {
   byName: Map<string, Product>
 }
 
+const COMEDOR_DOWNLOAD_PAGE = 'https://foodcoop-comedor.ch/index.php?page-id=2'
+const CORS_PROXY_URL = 'https://api.codetabs.com/v1/proxy?quest='
+
 function App() {
   const [appState, setAppState] = useState<PersistedAppState>(() => loadAppState())
   const [busyState, setBusyState] = useState<BusyState>({
@@ -85,6 +89,7 @@ function App() {
   const [fehler, setFehler] = useState<string | null>(null)
   const [zeigeAktuellesMapping, setZeigeAktuellesMapping] = useState(false)
   const [zeigeVorherigesMapping, setZeigeVorherigesMapping] = useState(false)
+  const [zeigeWeitereProdukte, setZeigeWeitereProdukte] = useState(false)
 
   const aktuellerInputRef = useRef<HTMLInputElement | null>(null)
   const vorherigerInputRef = useRef<HTMLInputElement | null>(null)
@@ -124,13 +129,21 @@ function App() {
   const positionsAnzahl = bestellRows.length
 
   async function importWorkbook(kind: 'aktuell' | 'vorherig', file: File) {
+    await importWorkbookBuffer(kind, file.name, await file.arrayBuffer())
+  }
+
+  async function importWorkbookBuffer(
+    kind: 'aktuell' | 'vorherig',
+    fileName: string,
+    buffer: ArrayBuffer,
+    message?: string,
+  ) {
     setFehler(null)
     setMeldung(null)
     setBusy(kind, true)
 
     try {
-      const buffer = await file.arrayBuffer()
-      const parsed = parseWorkbookBuffer(file.name, buffer)
+      const parsed = parseWorkbookBuffer(fileName, buffer)
       const existingSource =
         kind === 'aktuell' ? appState.currentWorkbook : appState.previousWorkbook
       const workbookKey =
@@ -168,9 +181,10 @@ function App() {
       })
 
       setMeldung(
-        kind === 'aktuell'
-          ? `${source.products.length} Produkte aus ${file.name} importiert.`
-          : `Vorherige Bestellliste ${file.name} importiert.`,
+        message ??
+        (kind === 'aktuell'
+          ? `${source.products.length} Produkte aus ${fileName} importiert.`
+          : `Vorherige Bestellliste ${fileName} importiert.`),
       )
     } catch (error) {
       setFehler(
@@ -180,6 +194,39 @@ function App() {
       )
     } finally {
       setBusy(kind, false)
+    }
+  }
+
+  async function loadCurrentCatalogFromComedor() {
+    setFehler(null)
+    setMeldung(null)
+    setBusy('aktuell', true)
+
+    try {
+      const pageHtml = await fetchTextWithFallback(COMEDOR_DOWNLOAD_PAGE)
+      const excelUrl = findCurrentOrderListUrl(pageHtml, COMEDOR_DOWNLOAD_PAGE)
+
+      if (!excelUrl) {
+        throw new Error('Auf der Comedor-Downloadseite wurde keine Excel-Bestellliste gefunden.')
+      }
+
+      const buffer = await fetchArrayBufferWithFallback(excelUrl)
+      const fileName = fileNameFromUrl(excelUrl)
+
+      await importWorkbookBuffer(
+        'aktuell',
+        fileName,
+        buffer,
+        `Aktuelle Bestellliste direkt von der Comedor-Webseite geladen: ${fileName}.`,
+      )
+    } catch (error) {
+      setFehler(
+        error instanceof Error
+          ? `${error.message} Du kannst die Datei weiterhin manuell hochladen.`
+          : 'Die Bestellliste konnte nicht automatisch geladen werden. Du kannst die Datei weiterhin manuell hochladen.',
+      )
+    } finally {
+      setBusy('aktuell', false)
     }
   }
 
@@ -369,13 +416,17 @@ function App() {
     field: keyof InventoryDraft,
     value: string,
   ) {
+    patchDraft(productId, { [field]: value })
+  }
+
+  function patchDraft(productId: string, patch: Partial<InventoryDraft>) {
     setAppState((previous) => ({
       ...previous,
       inventoryDrafts: {
         ...previous.inventoryDrafts,
         [productId]: {
           ...previous.inventoryDrafts[productId],
-          [field]: value,
+          ...patch,
         },
       },
     }))
@@ -384,6 +435,71 @@ function App() {
   function nudgeSoll(productId: string, currentValue: number, delta: number) {
     const nextValue = roundQuantity(Math.max(0, currentValue + delta))
     setDraftValue(productId, 'target', nextValue > 0 ? String(nextValue) : '')
+  }
+
+  function setInventorySollValue(row: PlanRow, value: string) {
+    const parsed = parseNumber(value)
+    const patch: Partial<InventoryDraft> = {
+      target: value,
+      inInventory: true,
+    }
+
+    if (parsed !== null && parsed > 0) {
+      patch.lastTarget = value
+    } else if (!appState.inventoryDrafts[row.product.id]?.lastTarget && row.target > 0) {
+      patch.lastTarget = formatNumberInput(row.target)
+    }
+
+    patchDraft(row.product.id, patch)
+  }
+
+  function commitInventorySollValue(row: PlanRow) {
+    if (row.target > 0) {
+      return
+    }
+
+    const currentDraft = appState.inventoryDrafts[row.product.id]
+    const fallbackValue = currentDraft?.lastTarget ?? '1'
+
+    if (confirmInventoryRemoval(row.product.name)) {
+      patchDraft(row.product.id, {
+        target: '0',
+        inInventory: false,
+      })
+      return
+    }
+
+    patchDraft(row.product.id, {
+      target: fallbackValue,
+      lastTarget: fallbackValue,
+      inInventory: true,
+    })
+  }
+
+  function nudgeInventorySoll(row: PlanRow, delta: number) {
+    const nextValue = roundQuantity(Math.max(0, row.target + delta))
+
+    if (nextValue <= 0) {
+      if (confirmInventoryRemoval(row.product.name)) {
+        patchDraft(row.product.id, {
+          target: '0',
+          inInventory: false,
+        })
+      }
+      return
+    }
+
+    const value = String(nextValue)
+    patchDraft(row.product.id, {
+      target: value,
+      lastTarget: value,
+      inInventory: true,
+    })
+  }
+
+  function nudgeIst(productId: string, currentValue: number | null, delta: number) {
+    const nextValue = roundQuantity(Math.max(0, (currentValue ?? 0) + delta))
+    setDraftValue(productId, 'actual', String(nextValue))
   }
 
   function addProductToInventory(productId: string) {
@@ -395,7 +511,9 @@ function App() {
           [productId]: {
             ...previous.inventoryDrafts[productId],
             target: '1',
+            lastTarget: '1',
             actual: '0',
+            inInventory: true,
           },
         },
       }))
@@ -498,12 +616,12 @@ function App() {
             <button
               className="button button-primary"
               type="button"
-              onClick={() => aktuellerInputRef.current?.click()}
+              onClick={() => void loadCurrentCatalogFromComedor()}
               disabled={busyState.aktuellerImport}
             >
               {busyState.aktuellerImport
-                ? 'Aktuelle Liste wird importiert...'
-                : 'Aktuelle Bestellliste importieren'}
+                ? 'Bestellliste wird geladen...'
+                : 'Bestellliste direkt laden'}
             </button>
             <button
               className="button button-secondary"
@@ -562,13 +680,13 @@ function App() {
 
       <section className="wizard-rail">
         <RailStep
-          title="1. Import"
-          description="Aktuelle Bestellliste laden."
+          title="1. Bestellliste importieren"
+          description="Direkt von der Comedor-Webseite laden oder die Excel-Datei manuell hochladen."
           isReady={Boolean(appState.currentWorkbook)}
         />
         <RailStep
           title="2. Inventur machen"
-          description="Vorherige Bestellliste importieren, um Soll- und Ist-Werte automatisch zu übernehmen."
+          description="Vorherige Bestellliste importieren, um Soll-Werte automatisch zu übernehmen."
           isReady={appState.previousWorkbook !== null}
           optional
         />
@@ -589,10 +707,11 @@ function App() {
       <section className="import-grid">
         <ImportCard
           title="Aktuelle Bestellliste"
-          subtitle="Diese Datei bestimmt Katalog, Export und Bestellübersicht."
+          subtitle="Direkt von Comedor laden oder manuell hochladen."
           source={appState.currentWorkbook}
           busy={busyState.aktuellerImport}
           onSelectFile={() => aktuellerInputRef.current?.click()}
+          onLoadDirect={() => void loadCurrentCatalogFromComedor()}
           onDropFile={(file) => void importWorkbook('aktuell', file)}
         >
           {appState.currentWorkbook ? (
@@ -634,15 +753,16 @@ function App() {
             </>
           ) : (
             <p className="empty-copy">
-              Ziehe die aktuelle Comedor-Bestellliste hier hinein oder wähle sie aus.
-              Die App erkennt die echte Beispielstruktur mit der Kopfzeile in Zeile 16.
+              Standardmässig lädt die App die erste Excel-Datei mit „Bestellliste“
+              von der Comedor-Downloadseite. Alternativ kannst du eine lokal
+              gespeicherte Excel-Datei hier hineinziehen oder manuell hochladen.
             </p>
           )}
         </ImportCard>
 
         <ImportCard
           title="Vorherige Bestellliste"
-          subtitle="Für automatische Übernahme von Soll- und Ist-Werten"
+          subtitle="Für automatische Übernahme von Soll-Werten"
           source={appState.previousWorkbook}
           busy={busyState.vorherigerImport}
           onSelectFile={() => vorherigerInputRef.current?.click()}
@@ -688,6 +808,7 @@ function App() {
             <p className="empty-copy">
               Wenn du die vorige Runde importierst, kann die Inventur Soll-Mengen
               automatisch vorbelegen und nicht mehr verfügbare Produkte markieren.
+              Ist-Werte werden bewusst nicht aus alten Dateien übernommen.
             </p>
           )}
         </ImportCard>
@@ -859,11 +980,16 @@ function App() {
                         key={row.product.id}
                         row={row}
                         onSollChange={(value) =>
-                          setDraftValue(row.product.id, 'target', value)
+                          setInventorySollValue(row, value)
                         }
+                        onSollBlur={() => commitInventorySollValue(row)}
+                        onSollDecrease={() => nudgeInventorySoll(row, -1)}
+                        onSollIncrease={() => nudgeInventorySoll(row, 1)}
                         onIstChange={(value) =>
                           setDraftValue(row.product.id, 'actual', value)
                         }
+                        onIstDecrease={() => nudgeIst(row.product.id, row.actual, -1)}
+                        onIstIncrease={() => nudgeIst(row.product.id, row.actual, 1)}
                         onOrderChange={(value) =>
                           setDraftValue(row.product.id, 'order', value)
                         }
@@ -915,34 +1041,59 @@ function App() {
                   </section>
                 ) : null}
 
-                <section className="inventory-section inventory-section-add">
+                <section
+                  className={`inventory-section inventory-section-add ${
+                    zeigeWeitereProdukte ? 'is-open' : ''
+                  }`}
+                >
                   <div className="inventory-section-head">
                     <div>
                       <span className="eyebrow">Weitere Produkte</span>
                       <h3>Zur Inventur hinzufügen</h3>
                     </div>
-                    <span className="section-count">
-                      {planModel.addableRows.length} Produkte
-                    </span>
+                    <div className="inventory-section-controls">
+                      <span className="section-count">
+                        {planModel.addableRows.length} Produkte
+                      </span>
+                      <button
+                        className="button button-secondary inventory-add-toggle"
+                        type="button"
+                        onClick={() =>
+                          setZeigeWeitereProdukte((isVisible) => !isVisible)
+                        }
+                      >
+                        {zeigeWeitereProdukte
+                          ? 'Weitere Produkte ausblenden'
+                          : 'Weitere Produkte einblenden'}
+                      </button>
+                    </div>
                   </div>
-                  <div className="inventory-add-list">
-                    {planModel.addableRows.map((row) => (
-                      <AddInventoryProductCard
-                        key={row.product.id}
-                        row={row}
-                        onAdd={() => addProductToInventory(row.product.id)}
-                      />
-                    ))}
-                  </div>
-                </section>
 
-                {planModel.addableRows.length === 0 ? (
-                  <EmptyState
-                    title="Keine weiteren Produkte sichtbar"
-                    description="Die Suche filtert alles weg oder alle passenden Produkte sind bereits in der aktiven Inventur."
-                    compact
-                  />
-                ) : null}
+                  {zeigeWeitereProdukte ? (
+                    planModel.addableRows.length > 0 ? (
+                      <div className="inventory-add-list">
+                        {planModel.addableRows.map((row) => (
+                          <AddInventoryProductCard
+                            key={row.product.id}
+                            row={row}
+                            onAdd={() => addProductToInventory(row.product.id)}
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <EmptyState
+                        title="Keine weiteren Produkte sichtbar"
+                        description="Die Suche filtert alles weg oder alle passenden Produkte sind bereits in der aktiven Inventur."
+                        compact
+                      />
+                    )
+                  ) : (
+                    <p className="helper-copy inventory-add-hint">
+                      Ausgeblendet, damit die Inventur kompakt bleibt. Blende die Liste ein,
+                      wenn du zusätzliche Produkte aufnehmen möchtest.
+                    </p>
+                  )}
+                </section>
               </>
             )
           ) : (
@@ -1006,6 +1157,80 @@ function App() {
   )
 }
 
+async function fetchTextWithFallback(url: string) {
+  const response = await fetchWithCorsFallback(url)
+  return response.text()
+}
+
+async function fetchArrayBufferWithFallback(url: string) {
+  const response = await fetchWithCorsFallback(url)
+  return response.arrayBuffer()
+}
+
+async function fetchWithCorsFallback(url: string) {
+  try {
+    return await fetchChecked(url)
+  } catch (directError) {
+    try {
+      return await fetchChecked(`${CORS_PROXY_URL}${encodeURIComponent(url)}`)
+    } catch (proxyError) {
+      throw new Error(
+        proxyError instanceof Error
+          ? proxyError.message
+          : directError instanceof Error
+            ? directError.message
+            : 'Die Datei konnte nicht geladen werden.',
+      )
+    }
+  }
+}
+
+async function fetchChecked(url: string) {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 18000)
+
+  try {
+    const response = await fetch(url, { signal: controller.signal })
+
+    if (!response.ok) {
+      throw new Error(`Download fehlgeschlagen (${response.status}).`)
+    }
+
+    return response
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
+
+function findCurrentOrderListUrl(html: string, baseUrl: string) {
+  const document = new DOMParser().parseFromString(html, 'text/html')
+  const links = Array.from(document.querySelectorAll('a'))
+
+  const match = links.find((link) => {
+    const text = normalizeKey(link.textContent ?? '')
+    const href = link.getAttribute('href') ?? ''
+
+    return text.includes('bestellliste') && /\.xlsx?(\?|#|$)/i.test(href)
+  })
+
+  const href = match?.getAttribute('href')
+
+  return href ? new URL(href, baseUrl).href : null
+}
+
+function fileNameFromUrl(url: string) {
+  const pathname = new URL(url).pathname
+  const rawName = pathname.split('/').filter(Boolean).pop() ?? 'comedor-bestellliste.xlsx'
+
+  return decodeURIComponent(rawName)
+}
+
+function confirmInventoryRemoval(productName: string) {
+  return window.confirm(
+    `"${productName}" aus der Inventur entfernen?\n\nWenn Soll auf 0 gesetzt wird, wandert das Produkt zurück zu "Weitere Produkte".`,
+  )
+}
+
 function matchesKatalogFilter(
   product: Product,
   query: string,
@@ -1046,8 +1271,8 @@ function buildPlanModel(
 
       const draft = drafts[product.id]
       const fallbackTarget = fallbackTargetQuantity(product, previousMatch)
-      const fallbackActual = fallbackActualQuantity(product, previousMatch)
-      
+      const fallbackActual = fallbackActualQuantity(product)
+
       const targetInput = draft?.target ?? formatNumberInput(fallbackTarget)
       const actualInput = draft?.actual ?? formatNullableNumberInput(fallbackActual)
       const target = resolveTargetQuantity(draft?.target, fallbackTarget)
@@ -1060,6 +1285,10 @@ function buildPlanModel(
           : roundQuantity(Math.max(0, target - actual))
       const orderInput = draft?.order ?? formatNumberInput(derivedOrder)
       const order = resolveOrderQuantity(draft?.order, derivedOrder)
+      const inInventory =
+        draft?.inInventory === false
+          ? false
+          : draft?.inInventory === true || target > 0
 
       return {
         product,
@@ -1074,6 +1303,7 @@ function buildPlanModel(
         orderInput,
         hasOrderOverride:
           draft?.order !== undefined && draft.order.trim() !== '',
+        inInventory,
       }
     })
     .sort((left, right) => compareProducts(left.product, right.product))
@@ -1086,8 +1316,8 @@ function buildPlanModel(
     return row.product.searchText.includes(normalizedQuery)
   })
 
-  const rows = matchingRows.filter((row) => row.target > 0)
-  const addableRows = matchingRows.filter((row) => row.target <= 0)
+  const rows = matchingRows.filter((row) => row.inInventory)
+  const addableRows = matchingRows.filter((row) => !row.inInventory)
 
   const discontinued = previousProducts
     .filter((product) => !matchedPreviousIds.has(product.id))
@@ -1245,13 +1475,11 @@ function fallbackTargetQuantity(product: Product, previousMatch: Product | null)
   return 0
 }
 
-function fallbackActualQuantity(product: Product, previousMatch: Product | null) {
+function fallbackActualQuantity(product: Product) {
   if (product.actualQuantity !== null && product.actualQuantity !== undefined) {
     return product.actualQuantity
   }
-  if (previousMatch) {
-    return previousActual(previousMatch)
-  }
+
   return null
 }
 
@@ -1261,13 +1489,6 @@ function previousTarget(product: Product) {
   }
 
   return product.orderQuantity > 0 ? product.orderQuantity : 0
-}
-
-function previousActual(product: Product) {
-  if (product.actualQuantity !== null && product.actualQuantity !== undefined) {
-    return product.actualQuantity
-  }
-  return null
 }
 
 function resolveTargetQuantity(value: string | undefined, fallback: number) {
@@ -1470,6 +1691,7 @@ function ImportCard({
   source,
   busy,
   onSelectFile,
+  onLoadDirect,
   onDropFile,
   children,
 }: {
@@ -1478,6 +1700,7 @@ function ImportCard({
   source: WorkbookSource | null
   busy: boolean
   onSelectFile: () => void
+  onLoadDirect?: () => void
   onDropFile: (file: File) => void
   children: ReactNode
 }) {
@@ -1507,14 +1730,33 @@ function ImportCard({
           <span className="eyebrow">{title}</span>
           <h2>{subtitle}</h2>
         </div>
-        <button
-          className="button button-secondary"
-          type="button"
-          onClick={onSelectFile}
-          disabled={busy}
+        <div
+          className={`import-actions ${
+            onLoadDirect ? 'has-direct-load' : 'has-single-action'
+          }`}
         >
-          {busy ? 'Bitte warten...' : source ? 'Datei ersetzen' : 'Datei wählen'}
-        </button>
+          {onLoadDirect ? (
+            <button
+              className="button button-primary"
+              type="button"
+              onClick={onLoadDirect}
+              disabled={busy}
+            >
+              {busy ? 'Laden...' : 'Direkt laden'}
+            </button>
+          ) : null}
+          <button
+            className="button button-secondary"
+            type="button"
+            aria-label={
+              source ? `${title} manuell neu laden` : `${title} manuell laden`
+            }
+            onClick={onSelectFile}
+            disabled={busy}
+          >
+            {busy ? 'Bitte warten...' : 'Hochladen'}
+          </button>
+        </div>
       </div>
       {children}
     </section>
@@ -1605,6 +1847,93 @@ function MappingEditor({
   )
 }
 
+function NumberStepperField({
+  label,
+  value,
+  onChange,
+  onDecrease,
+  onIncrease,
+  onBlur,
+  placeholder = '0',
+  className = '',
+  afterControl,
+  inputTabIndex,
+  controlTabIndex,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  onDecrease: () => void
+  onIncrease: () => void
+  onBlur?: () => void
+  placeholder?: string
+  className?: string
+  afterControl?: ReactNode
+  inputTabIndex?: number
+  controlTabIndex?: number
+}) {
+  return (
+    <label className={`field number-field ${className}`}>
+      <span className="field-label">{label}</span>
+      <div className="number-control-with-addon">
+        <div className="number-control">
+          <button
+            className="stepper-button stepper-button-mobile"
+            type="button"
+            tabIndex={controlTabIndex}
+            aria-label={`${label} verringern`}
+            onClick={onDecrease}
+          >
+            -
+          </button>
+          <div className="number-stepper">
+            <input
+              className="field-input number-stepper-input"
+              type="text"
+              inputMode="decimal"
+              value={value}
+              tabIndex={inputTabIndex}
+              onChange={(event) => onChange(event.target.value)}
+              onBlur={onBlur}
+              placeholder={placeholder}
+            />
+            <div className="number-stepper-actions">
+              <button
+                className="stepper-button"
+                type="button"
+                tabIndex={controlTabIndex}
+                aria-label={`${label} erhöhen`}
+                onClick={onIncrease}
+              >
+                +
+              </button>
+              <button
+                className="stepper-button"
+                type="button"
+                tabIndex={controlTabIndex}
+                aria-label={`${label} verringern`}
+                onClick={onDecrease}
+              >
+                -
+              </button>
+            </div>
+          </div>
+          <button
+            className="stepper-button stepper-button-mobile"
+            type="button"
+            tabIndex={controlTabIndex}
+            aria-label={`${label} erhöhen`}
+            onClick={onIncrease}
+          >
+            +
+          </button>
+        </div>
+        {afterControl}
+      </div>
+    </label>
+  )
+}
+
 function ProductCard({
   row,
   onDecrease,
@@ -1638,25 +1967,13 @@ function ProductCard({
         </span>
       </div>
 
-      <div className="quantity-stepper">
-        <button className="qty-button" type="button" onClick={onDecrease}>
-          -
-        </button>
-        <label className="qty-field">
-          <span>Soll</span>
-          <input
-            className="qty-input"
-            type="text"
-            inputMode="decimal"
-            value={row.targetInput}
-            onChange={(event) => onSollChange(event.target.value)}
-            placeholder="0"
-          />
-        </label>
-        <button className="qty-button" type="button" onClick={onIncrease}>
-          +
-        </button>
-      </div>
+      <NumberStepperField
+        label="Soll"
+        value={row.targetInput}
+        onChange={onSollChange}
+        onDecrease={onDecrease}
+        onIncrease={onIncrease}
+      />
 
       <div className="product-footer">
         <span>
@@ -1673,7 +1990,12 @@ function ProductCard({
 function InventoryRowCard({
   row,
   onSollChange,
+  onSollBlur,
+  onSollDecrease,
+  onSollIncrease,
   onIstChange,
+  onIstDecrease,
+  onIstIncrease,
   onOrderChange,
   onOrderDecrease,
   onOrderIncrease,
@@ -1681,7 +2003,12 @@ function InventoryRowCard({
 }: {
   row: PlanRow
   onSollChange: (value: string) => void
+  onSollBlur: () => void
+  onSollDecrease: () => void
+  onSollIncrease: () => void
   onIstChange: (value: string) => void
+  onIstDecrease: () => void
+  onIstIncrease: () => void
   onOrderChange: (value: string) => void
   onOrderDecrease: () => void
   onOrderIncrease: () => void
@@ -1696,6 +2023,9 @@ function InventoryRowCard({
         </div>
         <div className="inventory-badges">
           <span className="pill">{buildBulkLabel(row.product)}</span>
+          <span className="pill">
+            Preis: {row.product.price !== null ? formatCurrency(row.product.price) : 'nicht erkannt'}
+          </span>
           {row.previousMatch ? (
             <span
               className="pill pill-leaf pill-icon"
@@ -1711,28 +2041,24 @@ function InventoryRowCard({
       </div>
 
       <div className="inventory-grid">
-        <label className="field">
-          <span className="field-label">Soll</span>
-          <input
-            className="field-input"
-            type="text"
-            inputMode="decimal"
-            value={row.targetInput}
-            onChange={(event) => onSollChange(event.target.value)}
-            placeholder="0"
-          />
-        </label>
-        <label className="field">
-          <span className="field-label">Ist</span>
-          <input
-            className="field-input"
-            type="text"
-            inputMode="decimal"
-            value={row.actualInput}
-            onChange={(event) => onIstChange(event.target.value)}
-            placeholder="0"
-          />
-        </label>
+        <NumberStepperField
+          label="Soll"
+          value={row.targetInput}
+          onChange={onSollChange}
+          onDecrease={onSollDecrease}
+          onIncrease={onSollIncrease}
+          onBlur={onSollBlur}
+          inputTabIndex={-1}
+          controlTabIndex={-1}
+        />
+        <NumberStepperField
+          label="Ist"
+          value={row.actualInput}
+          onChange={onIstChange}
+          onDecrease={onIstDecrease}
+          onIncrease={onIstIncrease}
+          controlTabIndex={-1}
+        />
         <label className="field">
           <span className="field-label">Differenz</span>
           <input
@@ -1740,52 +2066,32 @@ function InventoryRowCard({
             type="text"
             value={formatQuantity(row.difference)}
             readOnly
+            tabIndex={-1}
           />
         </label>
-        <label className="field order-field">
-          <span className="field-label">Bestellung</span>
-          <div className="order-input-row">
-            <div className="number-stepper">
-              <input
-                className="field-input number-stepper-input"
-                type="number"
-                inputMode="decimal"
-                min="0"
-                step="any"
-                value={row.orderInput}
-                onChange={(event) => onOrderChange(event.target.value)}
-                placeholder={formatQuantity(row.derivedOrder)}
-              />
-              <div className="number-stepper-actions">
-              <button
-                  className="stepper-button"
-                  type="button"
-                  aria-label="Bestellung erhöhen"
-                  onClick={onOrderIncrease}
-                >
-                  +
-                </button>
-                <button
-                  className="stepper-button"
-                  type="button"
-                  aria-label="Bestellung verringern"
-                  onClick={onOrderDecrease}
-                >
-                  -
-                </button>
-              </div>
-            </div>
+        <NumberStepperField
+          label="Bestellung"
+          value={row.orderInput}
+          onChange={onOrderChange}
+          onDecrease={onOrderDecrease}
+          onIncrease={onOrderIncrease}
+          placeholder={formatQuantity(row.derivedOrder)}
+          className="order-field"
+          inputTabIndex={-1}
+          controlTabIndex={-1}
+          afterControl={
             <button
               title="Auf automatisch berechneten Wert zurücksetzen"
               className="tiny-button auto-button"
               type="button"
+              tabIndex={-1}
               onClick={onResetOrder}
               disabled={!row.hasOrderOverride}
             >
               Auto
             </button>
-          </div>
-        </label>
+          }
+        />
       </div>
     </article>
   )
@@ -1804,6 +2110,9 @@ function AddInventoryProductCard({
         <strong>{row.product.name}</strong>
         <span>{row.product.producer || 'Produzent unbekannt'}</span>
         <span>{buildBulkLabel(row.product)}</span>
+        <span>
+          Preis: {row.product.price !== null ? formatCurrency(row.product.price) : 'nicht erkannt'}
+        </span>
       </div>
       <button className="button button-secondary" type="button" onClick={onAdd}>
         Zur Inventur hinzufügen
