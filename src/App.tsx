@@ -687,7 +687,7 @@ function App() {
       <section className="import-grid">
         <ImportCard
           title="Aktuelle Bestellliste"
-          subtitle="Direkt von Comedor laden oder manuell hochladen."
+          subtitle="Direkt von Comedor laden oder manuell hochladen"
           source={appState.currentWorkbook}
           busy={busyState.aktuellerImport}
           onSelectFile={() => aktuellerInputRef.current?.click()}
@@ -742,7 +742,7 @@ function App() {
 
         <ImportCard
           title="Vorherige Bestellliste"
-          subtitle="Für automatische Übernahme von Soll-Werten"
+          subtitle="Soll-Werte von vorheriger Bestellliste übernehmen"
           source={appState.previousWorkbook}
           busy={busyState.vorherigerImport}
           onSelectFile={() => vorherigerInputRef.current?.click()}
