@@ -122,9 +122,6 @@ function App() {
     0,
   )
   const positionsAnzahl = bestellRows.length
-  const bestellMenge = roundQuantity(
-    bestellRows.reduce((total, row) => total + row.order, 0),
-  )
 
   async function importWorkbook(kind: 'aktuell' | 'vorherig', file: File) {
     setFehler(null)
