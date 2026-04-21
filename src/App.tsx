@@ -645,7 +645,7 @@ function App() {
 
         <ImportCard
           title="Vorherige Bestellliste"
-          subtitle="Optional für automatische Vorschläge in der Inventur."
+          subtitle="Für automatische Übernahme von Soll- und Ist-Werten"
           source={appState.previousWorkbook}
           busy={busyState.vorherigerImport}
           onSelectFile={() => vorherigerInputRef.current?.click()}
