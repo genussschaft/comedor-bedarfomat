@@ -5,7 +5,7 @@ Frontend-only Web-App zum Arbeiten mit der Comedor-Bestellliste.
 ## Was die App kann
 
 - Excel-Datei der aktuellen Comedor-Bestellliste importieren
-- Produktkatalog mit Suche, Filterung nach Produzent und Verpackung/Typ
+- Produktkatalog mit Suche, Produzentenfilter und Sortierung
 - Soll-Werte direkt im Katalog setzen
 - Inventuransicht mit Soll / Ist / abgeleiteter Bestellung
 - Vorherige Bestellliste importieren, um Soll-Werte automatisch vorzubelegen
@@ -46,8 +46,11 @@ Falls sich das Format ändert, kann die Feldzuordnung in der Oberfläche angepas
 
 ```bash
 npm install
-npm run dev
+npm start
 ```
+
+Der Start-Befehl startet den Entwicklungsserver unter `http://127.0.0.1:5173/`.
+Alternativ funktioniert weiterhin `npm run dev`.
 
 Build und Lint:
 

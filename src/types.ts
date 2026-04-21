@@ -12,6 +12,13 @@ export type ColumnRole =
 
 export type AppView = 'catalog' | 'inventory'
 
+export type SortMode =
+  | 'producer'
+  | 'name'
+  | 'target-desc'
+  | 'price-asc'
+  | 'price-desc'
+
 export interface ColumnMapping {
   sku?: number
   name?: number
@@ -87,11 +94,11 @@ export interface WorkbookSource {
 export interface InventoryDraft {
   target?: string
   actual?: string
+  order?: string
 }
 
 export interface PersistedFilters {
   producer: string
-  category: string
 }
 
 export interface PersistedAppState {
@@ -102,4 +109,5 @@ export interface PersistedAppState {
   searchQuery: string
   inventoryQuery: string
   filters: PersistedFilters
+  sortMode: SortMode
 }

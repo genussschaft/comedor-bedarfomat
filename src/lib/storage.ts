@@ -13,8 +13,8 @@ export function getInitialAppState(): PersistedAppState {
     inventoryQuery: '',
     filters: {
       producer: '',
-      category: '',
     },
+    sortMode: 'producer',
   }
 }
 
@@ -41,6 +41,7 @@ export function loadAppState(): PersistedAppState {
       inventoryDrafts: parsed.inventoryDrafts ?? {},
       currentWorkbook: parsed.currentWorkbook ?? null,
       previousWorkbook: parsed.previousWorkbook ?? null,
+      sortMode: parsed.sortMode ?? 'producer',
     }
   } catch {
     return getInitialAppState()

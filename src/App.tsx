@@ -30,6 +30,7 @@ import type {
   InventoryDraft,
   PersistedAppState,
   Product,
+  SortMode,
   WorkbookSource,
 } from './types'
 
@@ -46,14 +47,18 @@ interface PlanRow {
   previousMatch: Product | null
   target: number
   actual: number | null
+  derivedOrder: number
   order: number
   difference: number
   targetInput: string
   actualInput: string
+  orderInput: string
+  hasOrderOverride: boolean
 }
 
 interface PlanModel {
   rows: PlanRow[]
+  addableRows: PlanRow[]
   allRows: PlanRow[]
   discontinued: Product[]
   matchedCount: number
@@ -102,13 +107,10 @@ function App() {
 
   const sichtbarePlanRows = planModel.allRows
     .filter((row) => matchesKatalogFilter(row.product, deferredSuche, appState))
-    .sort((left, right) => compareProducts(left.product, right.product))
+    .sort((left, right) => comparePlanRows(left, right, appState.sortMode))
 
   const producerOptions = uniqueSortedValues(
     aktuelleProdukte.map((product) => product.producer),
-  )
-  const categoryOptions = uniqueSortedValues(
-    aktuelleProdukte.map((product) => product.category),
   )
 
   const bestellRows = planModel.allRows
@@ -252,6 +254,34 @@ function App() {
 
     setFehler(null)
     setMeldung(null)
+
+    const rowsWithDecimalOrders = planModel.allRows.filter(
+      (row) => row.order > 0 && hasDecimalPart(row.order),
+    )
+
+    if (rowsWithDecimalOrders.length > 0) {
+      const preview = rowsWithDecimalOrders
+        .slice(0, 12)
+        .map(
+          (row) =>
+            `- ${row.product.name} (${formatQuantity(row.order)})`,
+        )
+        .join('\n')
+      const extra =
+        rowsWithDecimalOrders.length > 12
+          ? `\n... und ${rowsWithDecimalOrders.length - 12} weitere Produkte`
+          : ''
+
+      if (
+        !window.confirm(
+          `Diese Bestellmengen haben Kommastellen:\n${preview}${extra}\n\nTrotzdem exportieren?`,
+        )
+      ) {
+        setMeldung('Export abgebrochen. Runde die betroffenen Bestellmengen oder exportiere trotzdem.')
+        return
+      }
+    }
+
     setBusyState((previous) => ({ ...previous, export: true }))
 
     try {
@@ -315,7 +345,7 @@ function App() {
     })
   }
 
-  function setFilter(field: 'producer' | 'category', value: string) {
+  function setFilter(field: 'producer', value: string) {
     startTransition(() => {
       setAppState((previous) => ({
         ...previous,
@@ -327,11 +357,38 @@ function App() {
     })
   }
 
+  function setSortMode(value: SortMode) {
+    startTransition(() => {
+      setAppState((previous) => ({
+        ...previous,
+        sortMode: value,
+      }))
+    })
+  }
+
   function setDraftValue(
     productId: string,
     field: keyof InventoryDraft,
     value: string,
   ) {
+    setAppState((previous) => ({
+      ...previous,
+      inventoryDrafts: {
+        ...previous.inventoryDrafts,
+        [productId]: {
+          ...previous.inventoryDrafts[productId],
+          [field]: value,
+        },
+      },
+    }))
+  }
+
+  function nudgeSoll(productId: string, currentValue: number, delta: number) {
+    const nextValue = roundQuantity(Math.max(0, currentValue + delta))
+    setDraftValue(productId, 'target', nextValue > 0 ? String(nextValue) : '')
+  }
+
+  function addProductToInventory(productId: string) {
     startTransition(() => {
       setAppState((previous) => ({
         ...previous,
@@ -339,16 +396,61 @@ function App() {
           ...previous.inventoryDrafts,
           [productId]: {
             ...previous.inventoryDrafts[productId],
-            [field]: value,
+            target: '1',
+            actual: '0',
           },
         },
       }))
     })
   }
 
-  function nudgeSoll(productId: string, currentValue: number, delta: number) {
-    const nextValue = roundQuantity(Math.max(0, currentValue + delta))
-    setDraftValue(productId, 'target', nextValue > 0 ? String(nextValue) : '')
+  function nudgeOrder(productId: string, currentValue: number, direction: -1 | 1) {
+    setAppState((previous) => {
+      const currentDraft = previous.inventoryDrafts[productId]
+      const valueFromDraft = resolveOrderQuantity(currentDraft?.order, currentValue)
+      const nextValue =
+        direction > 0
+          ? hasDecimalPart(valueFromDraft)
+            ? Math.ceil(valueFromDraft)
+            : valueFromDraft + 1
+          : hasDecimalPart(valueFromDraft)
+            ? Math.floor(valueFromDraft)
+            : valueFromDraft - 1
+
+      return {
+        ...previous,
+        inventoryDrafts: {
+          ...previous.inventoryDrafts,
+          [productId]: {
+            ...(currentDraft ?? {}),
+            order: String(roundQuantity(Math.max(0, nextValue))),
+          },
+        },
+      }
+    })
+  }
+
+  function resetOrderOverride(productId: string) {
+    startTransition(() => {
+      setAppState((previous) => {
+        const currentDraft = previous.inventoryDrafts[productId]
+
+        if (!currentDraft || currentDraft.order === undefined) {
+          return previous
+        }
+
+        const nextDraft = { ...currentDraft }
+        delete nextDraft.order
+
+        return {
+          ...previous,
+          inventoryDrafts: {
+            ...previous.inventoryDrafts,
+            [productId]: nextDraft,
+          },
+        }
+      })
+    })
   }
 
   async function clearSavedWorkspace() {
@@ -467,9 +569,10 @@ function App() {
           isReady={Boolean(appState.currentWorkbook)}
         />
         <RailStep
-          title="2. Soll & Ist pflegen"
-          description="Soll direkt im Katalog oder gesammelt in der Inventur setzen."
+          title="2. Inventur machen"
+          description="Soll-Werte direkt im Katalog oder gesammelt in der Inventur setzen."
           isReady={planModel.sollCount > 0}
+          optional
         />
         <RailStep
           title="3. Excel exportieren"
@@ -630,45 +733,46 @@ function App() {
           {appState.currentWorkbook ? (
             appState.activeView === 'catalog' ? (
               <>
-                <div className="filters-grid">
-                  <label className="field field-wide">
-                    <span className="field-label">Suche</span>
-                    <input
-                      className="field-input"
-                      type="search"
-                      value={appState.searchQuery}
-                      onChange={(event) => setSuche(event.target.value)}
-                      placeholder="Produktname, Produzent, Verpackung, Gebinde..."
-                    />
-                  </label>
-                  <label className="field">
-                    <span className="field-label">Produzent</span>
+                <div className="catalog-controls">
+                  <div className="filters-grid">
+                    <label className="field field-wide">
+                      <span className="field-label">Suche</span>
+                      <input
+                        className="field-input"
+                        type="search"
+                        value={appState.searchQuery}
+                        onChange={(event) => setSuche(event.target.value)}
+                        placeholder="Produktname, Produzent, Verpackung, Gebinde..."
+                      />
+                    </label>
+                    <label className="field">
+                      <span className="field-label">Produzent</span>
+                      <select
+                        className="field-input"
+                        value={appState.filters.producer}
+                        onChange={(event) => setFilter('producer', event.target.value)}
+                      >
+                        <option value="">Alle</option>
+                        {producerOptions.map((producer) => (
+                          <option key={producer} value={producer}>
+                            {producer}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <label className="field sort-control">
+                    <span className="field-label">Sortierung</span>
                     <select
-                      className="field-input"
-                      value={appState.filters.producer}
-                      onChange={(event) => setFilter('producer', event.target.value)}
+                      className="field-input field-input-quiet"
+                      value={appState.sortMode}
+                      onChange={(event) => setSortMode(event.target.value as SortMode)}
                     >
-                      <option value="">Alle</option>
-                      {producerOptions.map((producer) => (
-                        <option key={producer} value={producer}>
-                          {producer}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span className="field-label">Verpackung / Typ</span>
-                    <select
-                      className="field-input"
-                      value={appState.filters.category}
-                      onChange={(event) => setFilter('category', event.target.value)}
-                    >
-                      <option value="">Alle</option>
-                      {categoryOptions.map((category) => (
-                        <option key={category} value={category}>
-                          {category}
-                        </option>
-                      ))}
+                      <option value="producer">Produzent, dann Name</option>
+                      <option value="name">Name</option>
+                      <option value="target-desc">Soll zuerst</option>
+                      <option value="price-asc">Preis aufsteigend</option>
+                      <option value="price-desc">Preis absteigend</option>
                     </select>
                   </label>
                 </div>
@@ -698,7 +802,7 @@ function App() {
                 {sichtbarePlanRows.length === 0 ? (
                   <EmptyState
                     title="Keine Produkte passend zur aktuellen Filterung"
-                    description="Versuche eine breitere Suche oder setze Produzent und Verpackung zurück."
+                    description="Versuche eine breitere Suche oder setze den Produzentenfilter zurück."
                   />
                 ) : null}
               </>
@@ -735,30 +839,48 @@ function App() {
 
                 <div className="inventory-actions">
                   <span className="helper-copy">
-                    Die vorige Bestelliste liefert nur Vorschläge. Jede Zeile kann hier
-                    manuell überschrieben werden.
+                    Die Inventur ist optional. Bereits ausgewählte Produkte stehen oben;
+                    weitere Produkte kannst du unten zur Inventur hinzufügen.
                   </span>
                 </div>
 
-                <div className="inventory-list">
-                  {planModel.rows.map((row) => (
-                    <InventoryRowCard
-                      key={row.product.id}
-                      row={row}
-                      onSollChange={(value) =>
-                        setDraftValue(row.product.id, 'target', value)
-                      }
-                      onIstChange={(value) =>
-                        setDraftValue(row.product.id, 'actual', value)
-                      }
-                    />
-                  ))}
-                </div>
+                <section className="inventory-section inventory-section-active">
+                  <div className="inventory-section-head">
+                    <div>
+                      <span className="eyebrow">Inventur</span>
+                      <h3>Ausgewählte Produkte</h3>
+                    </div>
+                    <span className="section-count">
+                      {planModel.rows.length} Produkte
+                    </span>
+                  </div>
+
+                  <div className="inventory-list">
+                    {planModel.rows.map((row) => (
+                      <InventoryRowCard
+                        key={row.product.id}
+                        row={row}
+                        onSollChange={(value) =>
+                          setDraftValue(row.product.id, 'target', value)
+                        }
+                        onIstChange={(value) =>
+                          setDraftValue(row.product.id, 'actual', value)
+                        }
+                        onOrderChange={(value) =>
+                          setDraftValue(row.product.id, 'order', value)
+                        }
+                        onOrderDecrease={() => nudgeOrder(row.product.id, row.order, -1)}
+                        onOrderIncrease={() => nudgeOrder(row.product.id, row.order, 1)}
+                        onResetOrder={() => resetOrderOverride(row.product.id)}
+                      />
+                    ))}
+                  </div>
+                </section>
 
                 {planModel.rows.length === 0 ? (
                   <EmptyState
-                    title="Keine Inventurzeilen sichtbar"
-                    description="Entweder ist noch keine aktuelle Bestelliste importiert oder die Suche filtert alles weg."
+                    title="Noch keine Produkte in der Inventur"
+                    description="Füge unten ein Produkt hinzu oder importiere eine vorige Liste mit Soll-Werten."
                   />
                 ) : null}
 
@@ -766,27 +888,62 @@ function App() {
                   <section className="discontinued-panel">
                     <div className="panel-head">
                       <div>
-                        <span className="eyebrow">Nicht gefunden</span>
+                        <span className="eyebrow">Nicht mehr verfügbar</span>
                         <h3>Produkte aus der vorigen Liste ohne Treffer in der aktuellen Datei</h3>
+                        <p className="discontinued-copy">
+                          Diese Positionen sind in der alten Datei vorhanden, aber in
+                          der aktuellen Bestellliste nicht mehr enthalten.
+                        </p>
                       </div>
                     </div>
                     <div className="discontinued-list">
-                      {planModel.discontinued.map((product) => (
-                        <div key={product.id} className="discontinued-item">
-                          <div>
-                            <strong>{product.name}</strong>
-                            <span>{product.producer || 'Produzent unbekannt'}</span>
+                      {planModel.discontinued
+                        .filter((product) => previousTarget(product) > 0)
+                        .map((product) => (
+                          <div key={product.id} className="discontinued-item">
+                            <div>
+                              <strong>{product.name}</strong>
+                              <span>{product.producer || 'Produzent unbekannt'}</span>
+                            </div>
+                            <div className="discontinued-meta">
+                              <span>{buildBulkLabel(product)}</span>
+                              <span>
+                                Letztes Soll: {formatQuantity(previousTarget(product))}
+                              </span>
+                            </div>
                           </div>
-                          <div className="discontinued-meta">
-                            <span>{buildBulkLabel(product)}</span>
-                            <span>
-                              Letztes Soll: {formatQuantity(previousTarget(product))}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
+                        ))}
                     </div>
                   </section>
+                ) : null}
+
+                <section className="inventory-section inventory-section-add">
+                  <div className="inventory-section-head">
+                    <div>
+                      <span className="eyebrow">Weitere Produkte</span>
+                      <h3>Zur Inventur hinzufügen</h3>
+                    </div>
+                    <span className="section-count">
+                      {planModel.addableRows.length} Produkte
+                    </span>
+                  </div>
+                  <div className="inventory-add-list">
+                    {planModel.addableRows.map((row) => (
+                      <AddInventoryProductCard
+                        key={row.product.id}
+                        row={row}
+                        onAdd={() => addProductToInventory(row.product.id)}
+                      />
+                    ))}
+                  </div>
+                </section>
+
+                {planModel.addableRows.length === 0 ? (
+                  <EmptyState
+                    title="Keine weiteren Produkte sichtbar"
+                    description="Die Suche filtert alles weg oder alle passenden Produkte sind bereits in der aktiven Inventur."
+                    compact
+                  />
                 ) : null}
               </>
             )
@@ -802,7 +959,7 @@ function App() {
           <div className="panel-head">
             <div>
               <span className="eyebrow">Bestellübersicht</span>
-              <h2>Abgeleitete Bestellung</h2>
+              <h2>Bestellung</h2>
             </div>
             <button
               className="button button-primary"
@@ -842,7 +999,8 @@ function App() {
             <p className="helper-copy">
               Exportiert werden immer die Spalten <strong>Soll</strong>, <strong>Ist</strong>{' '}
               und <strong>Bestellung</strong>. Die Bestellmenge ergibt sich aus Soll minus
-              Ist oder direkt aus Soll, falls kein Ist gesetzt ist.
+              Ist oder direkt aus Soll, falls kein Ist gesetzt ist. In der Inventur kann
+              sie bei Bedarf manuell gerundet werden.
             </p>
           </div>
         </aside>
@@ -869,13 +1027,6 @@ function matchesKatalogFilter(
     return false
   }
 
-  if (
-    appState.filters.category &&
-    product.category !== appState.filters.category
-  ) {
-    return false
-  }
-
   return true
 }
 
@@ -898,35 +1049,39 @@ function buildPlanModel(
 
       const draft = drafts[product.id]
       const fallbackTarget = fallbackTargetQuantity(product, previousMatch)
-      const fallbackActual =
-        product.actualQuantity !== null && product.actualQuantity !== undefined
-          ? product.actualQuantity
-          : null
+      const fallbackActual = fallbackActualQuantity(product, previousMatch)
+      
       const targetInput = draft?.target ?? formatNumberInput(fallbackTarget)
       const actualInput = draft?.actual ?? formatNullableNumberInput(fallbackActual)
       const target = resolveTargetQuantity(draft?.target, fallbackTarget)
       const actual = resolveActualQuantity(draft?.actual, fallbackActual)
       const difference =
         actual === null ? target : roundQuantity(target - actual)
-      const order =
+      const derivedOrder =
         actual === null
           ? target
           : roundQuantity(Math.max(0, target - actual))
+      const orderInput = draft?.order ?? formatNumberInput(derivedOrder)
+      const order = resolveOrderQuantity(draft?.order, derivedOrder)
 
       return {
         product,
         previousMatch,
         target,
         actual,
+        derivedOrder,
         order,
         difference,
         targetInput,
         actualInput,
+        orderInput,
+        hasOrderOverride:
+          draft?.order !== undefined && draft.order.trim() !== '',
       }
     })
     .sort((left, right) => compareProducts(left.product, right.product))
 
-  const rows = allRows.filter((row) => {
+  const matchingRows = allRows.filter((row) => {
     if (!normalizedQuery) {
       return true
     }
@@ -934,15 +1089,16 @@ function buildPlanModel(
     return row.product.searchText.includes(normalizedQuery)
   })
 
+  const rows = matchingRows.filter((row) => row.target > 0)
+  const addableRows = matchingRows.filter((row) => row.target <= 0)
+
   const discontinued = previousProducts
-    .filter(
-      (product) =>
-        previousTarget(product) > 0 && !matchedPreviousIds.has(product.id),
-    )
+    .filter((product) => !matchedPreviousIds.has(product.id))
     .sort(compareProducts)
 
   return {
     rows,
+    addableRows,
     allRows,
     discontinued,
     matchedCount: matchedPreviousIds.size,
@@ -1092,12 +1248,29 @@ function fallbackTargetQuantity(product: Product, previousMatch: Product | null)
   return 0
 }
 
+function fallbackActualQuantity(product: Product, previousMatch: Product | null) {
+  if (product.actualQuantity !== null && product.actualQuantity !== undefined) {
+    return product.actualQuantity
+  }
+  if (previousMatch) {
+    return previousActual(previousMatch)
+  }
+  return null
+}
+
 function previousTarget(product: Product) {
   if (product.targetQuantity !== null && product.targetQuantity !== undefined) {
     return product.targetQuantity
   }
 
   return product.orderQuantity > 0 ? product.orderQuantity : 0
+}
+
+function previousActual(product: Product) {
+  if (product.actualQuantity !== null && product.actualQuantity !== undefined) {
+    return product.actualQuantity
+  }
+  return null
 }
 
 function resolveTargetQuantity(value: string | undefined, fallback: number) {
@@ -1127,11 +1300,55 @@ function resolveActualQuantity(
   return roundQuantity(Math.max(0, parseNumber(value) ?? 0))
 }
 
+function resolveOrderQuantity(value: string | undefined, fallback: number) {
+  if (value === undefined || value.trim() === '') {
+    return roundQuantity(Math.max(0, fallback))
+  }
+
+  return roundQuantity(Math.max(0, parseNumber(value) ?? fallback))
+}
+
 function compareProducts(left: Product, right: Product) {
   return (
     left.producer.localeCompare(right.producer) ||
     left.name.localeCompare(right.name)
   )
+}
+
+function comparePlanRows(left: PlanRow, right: PlanRow, sortMode: SortMode) {
+  if (sortMode === 'name') {
+    return left.product.name.localeCompare(right.product.name) || compareProducts(left.product, right.product)
+  }
+
+  if (sortMode === 'target-desc') {
+    return right.target - left.target || compareProducts(left.product, right.product)
+  }
+
+  if (sortMode === 'price-asc') {
+    return compareNullablePrice(left.product.price, right.product.price) || compareProducts(left.product, right.product)
+  }
+
+  if (sortMode === 'price-desc') {
+    return compareNullablePrice(right.product.price, left.product.price) || compareProducts(left.product, right.product)
+  }
+
+  return compareProducts(left.product, right.product)
+}
+
+function compareNullablePrice(left: number | null, right: number | null) {
+  if (left === null && right === null) {
+    return 0
+  }
+
+  if (left === null) {
+    return 1
+  }
+
+  if (right === null) {
+    return -1
+  }
+
+  return left - right
 }
 
 function uniqueSortedValues(values: string[]) {
@@ -1164,6 +1381,10 @@ function formatNullableNumberInput(value: number | null) {
 
 function roundQuantity(value: number) {
   return Math.round(value * 1000) / 1000
+}
+
+function hasDecimalPart(value: number) {
+  return Math.abs(value - Math.round(value)) > 0.000001
 }
 
 function buildBulkLabel(product: Product) {
@@ -1224,14 +1445,18 @@ function RailStep({
   title,
   description,
   isReady,
+  optional = false,
 }: {
   title: string
   description: string
   isReady: boolean
+  optional?: boolean
 }) {
   return (
-    <article className={`rail-step ${isReady ? 'is-ready' : ''}`}>
-      <div className="rail-badge">{isReady ? 'bereit' : 'offen'}</div>
+    <article className={`rail-step ${isReady ? 'is-ready' : ''} ${optional ? 'is-optional' : ''}`}>
+      <div className="rail-badge">
+        {optional ? 'optional' : isReady ? 'bereit' : 'offen'}
+      </div>
       <h3>{title}</h3>
       <p>{description}</p>
     </article>
@@ -1420,9 +1645,8 @@ function ProductCard({
           <span>Soll</span>
           <input
             className="qty-input"
-            type="number"
-            min="0"
-            step="1"
+            type="text"
+            inputMode="decimal"
             value={row.targetInput}
             onChange={(event) => onSollChange(event.target.value)}
             placeholder="0"
@@ -1449,13 +1673,21 @@ function InventoryRowCard({
   row,
   onSollChange,
   onIstChange,
+  onOrderChange,
+  onOrderDecrease,
+  onOrderIncrease,
+  onResetOrder,
 }: {
   row: PlanRow
   onSollChange: (value: string) => void
   onIstChange: (value: string) => void
+  onOrderChange: (value: string) => void
+  onOrderDecrease: () => void
+  onOrderIncrease: () => void
+  onResetOrder: () => void
 }) {
   return (
-    <article className="inventory-row">
+    <article className={`inventory-row ${row.hasOrderOverride ? 'has-order-override' : ''}`}>
       <div className="inventory-product">
         <div>
           <h3>{row.product.name}</h3>
@@ -1464,7 +1696,13 @@ function InventoryRowCard({
         <div className="inventory-badges">
           <span className="pill">{buildBulkLabel(row.product)}</span>
           {row.previousMatch ? (
-            <span className="pill pill-leaf">Treffer aus voriger Liste</span>
+            <span
+              className="pill pill-leaf pill-icon"
+              title="Treffer aus vorheriger Liste"
+              aria-label="Treffer aus vorheriger Liste"
+            >
+              ✓
+            </span>
           ) : (
             <span className="pill">Kein Treffer</span>
           )}
@@ -1476,9 +1714,8 @@ function InventoryRowCard({
           <span className="field-label">Soll</span>
           <input
             className="field-input"
-            type="number"
-            min="0"
-            step="0.1"
+            type="text"
+            inputMode="decimal"
             value={row.targetInput}
             onChange={(event) => onSollChange(event.target.value)}
             placeholder="0"
@@ -1488,17 +1725,88 @@ function InventoryRowCard({
           <span className="field-label">Ist</span>
           <input
             className="field-input"
-            type="number"
-            min="0"
-            step="0.1"
+            type="text"
+            inputMode="decimal"
             value={row.actualInput}
             onChange={(event) => onIstChange(event.target.value)}
-            placeholder="leer = Soll direkt bestellen"
+            placeholder="0"
           />
         </label>
-        <Metric label="Differenz" value={formatQuantity(row.difference)} />
-        <Metric label="Bestellung" value={formatQuantity(row.order)} highlight />
+        <label className="field">
+          <span className="field-label">Differenz</span>
+          <input
+            className="field-input field-input-readonly"
+            type="text"
+            value={formatQuantity(row.difference)}
+            readOnly
+          />
+        </label>
+        <label className="field order-field">
+          <span className="field-label">Bestellung</span>
+          <div className="order-input-row">
+            <div className="number-stepper">
+              <input
+                className="field-input number-stepper-input"
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="any"
+                value={row.orderInput}
+                onChange={(event) => onOrderChange(event.target.value)}
+                placeholder={formatQuantity(row.derivedOrder)}
+              />
+              <div className="number-stepper-actions">
+              <button
+                  className="stepper-button"
+                  type="button"
+                  aria-label="Bestellung erhöhen"
+                  onClick={onOrderIncrease}
+                >
+                  +
+                </button>
+                <button
+                  className="stepper-button"
+                  type="button"
+                  aria-label="Bestellung verringern"
+                  onClick={onOrderDecrease}
+                >
+                  -
+                </button>
+              </div>
+            </div>
+            <button
+              title="Auf automatisch berechneten Wert zurücksetzen"
+              className="tiny-button auto-button"
+              type="button"
+              onClick={onResetOrder}
+              disabled={!row.hasOrderOverride}
+            >
+              Auto
+            </button>
+          </div>
+        </label>
       </div>
+    </article>
+  )
+}
+
+function AddInventoryProductCard({
+  row,
+  onAdd,
+}: {
+  row: PlanRow
+  onAdd: () => void
+}) {
+  return (
+    <article className="add-product-card">
+      <div>
+        <strong>{row.product.name}</strong>
+        <span>{row.product.producer || 'Produzent unbekannt'}</span>
+        <span>{buildBulkLabel(row.product)}</span>
+      </div>
+      <button className="button button-secondary" type="button" onClick={onAdd}>
+        Zur Inventur hinzufügen
+      </button>
     </article>
   )
 }
@@ -1512,12 +1820,12 @@ function CartRow({ row }: { row: PlanRow }) {
       <div className="cart-row-copy">
         <strong>{row.product.name}</strong>
         <span>{row.product.producer || 'Produzent unbekannt'}</span>
-        <span>{formatQuantity(row.order)} x {buildBulkLabel(row.product)}</span>
       </div>
       <div className="cart-row-actions">
         <span>
-          Soll {formatQuantity(row.target)}
+          x {formatQuantity(row.order)}
           {row.actual !== null ? ` / Ist ${formatQuantity(row.actual)}` : ''}
+          {row.hasOrderOverride ? ' / manuell' : ''}
         </span>
         <strong>{subtotal !== null ? formatCurrency(subtotal) : ' '}</strong>
       </div>

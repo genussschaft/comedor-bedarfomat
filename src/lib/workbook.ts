@@ -560,18 +560,6 @@ function buildWarnings(mapping: ColumnMapping, productCount: number) {
     )
   }
 
-  if (mapping.targetQuantity === undefined) {
-    warnings.push(
-      'Es wurde keine Soll-Spalte erkannt. Beim Export wird automatisch eine Spalte "Soll" ergänzt.',
-    )
-  }
-
-  if (mapping.actualQuantity === undefined) {
-    warnings.push(
-      'Es wurde keine Ist-Spalte erkannt. Beim Export wird automatisch eine Spalte "Ist" ergänzt.',
-    )
-  }
-
   if (mapping.price === undefined) {
     warnings.push(
       'Es wurde keine Preisspalte erkannt. Totale funktionieren erst, wenn ein Preisfeld zugeordnet ist.',
