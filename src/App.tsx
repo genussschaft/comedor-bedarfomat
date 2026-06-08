@@ -74,7 +74,8 @@ interface ProductIndex {
 }
 
 const COMEDOR_DOWNLOAD_PAGE = 'https://foodcoop-comedor.ch/index.php?page-id=2'
-const CORS_PROXY_URL = 'https://api.codetabs.com/v1/proxy?quest='
+const COMEDOR_PROXY_URL = import.meta.env.VITE_COMEDOR_PROXY_URL?.trim() ?? ''
+const COMEDOR_PROXY_FILENAME_HEADER = 'x-comedor-filename'
 
 function App() {
   const [appState, setAppState] = useState<PersistedAppState>(() => loadAppState())
@@ -203,6 +204,19 @@ function App() {
     setBusy('aktuell', true)
 
     try {
+      const proxiedWorkbook = await fetchCurrentWorkbookFromWorker()
+
+      if (proxiedWorkbook) {
+        await importWorkbookBuffer(
+          'aktuell',
+          proxiedWorkbook.fileName,
+          proxiedWorkbook.buffer,
+          `Aktuelle Bestellliste direkt von der Comedor-Webseite geladen: ${proxiedWorkbook.fileName}.`,
+        )
+
+        return
+      }
+
       const pageHtml = await fetchTextWithFallback(COMEDOR_DOWNLOAD_PAGE)
       const excelUrl = findCurrentOrderListUrl(pageHtml, COMEDOR_DOWNLOAD_PAGE)
 
@@ -1148,21 +1162,52 @@ async function fetchArrayBufferWithFallback(url: string) {
 }
 
 async function fetchWithCorsFallback(url: string) {
+  const downloadErrors: string[] = []
+  const localProxyUrl = localComedorProxyUrl(url)
+
+  if (localProxyUrl) {
+    try {
+      return await fetchChecked(localProxyUrl)
+    } catch (localProxyError) {
+      downloadErrors.push(`Lokaler Proxy: ${formatDownloadError(localProxyError)}`)
+    }
+  }
+
   try {
     return await fetchChecked(url)
   } catch (directError) {
-    try {
-      return await fetchChecked(`${CORS_PROXY_URL}${encodeURIComponent(url)}`)
-    } catch (proxyError) {
-      throw new Error(
-        proxyError instanceof Error
-          ? proxyError.message
-          : directError instanceof Error
-            ? directError.message
-            : 'Die Datei konnte nicht geladen werden.',
-      )
-    }
+    downloadErrors.push(`Direkt: ${formatDownloadError(directError)}`)
+
+    throw new Error(`Automatischer Download fehlgeschlagen. ${downloadErrors.join(' ')}`)
   }
+}
+
+async function fetchCurrentWorkbookFromWorker() {
+  if (!COMEDOR_PROXY_URL) {
+    return null
+  }
+
+  const response = await fetchChecked(COMEDOR_PROXY_URL)
+
+  return {
+    buffer: await response.arrayBuffer(),
+    fileName: fileNameFromDownloadResponse(response),
+  }
+}
+
+function localComedorProxyUrl(url: string) {
+  if (!import.meta.env.DEV) {
+    return null
+  }
+
+  const proxyUrl = new URL(`${import.meta.env.BASE_URL}api/comedor-proxy`, window.location.origin)
+  proxyUrl.searchParams.set('url', url)
+
+  return proxyUrl.href
+}
+
+function formatDownloadError(error: unknown) {
+  return error instanceof Error ? error.message : 'Die Datei konnte nicht geladen werden.'
 }
 
 async function fetchChecked(url: string) {
@@ -1203,6 +1248,19 @@ function fileNameFromUrl(url: string) {
   const rawName = pathname.split('/').filter(Boolean).pop() ?? 'comedor-bestellliste.xlsx'
 
   return decodeURIComponent(rawName)
+}
+
+function fileNameFromDownloadResponse(response: Response) {
+  const proxyFileName = response.headers.get(COMEDOR_PROXY_FILENAME_HEADER)
+
+  if (proxyFileName) {
+    return proxyFileName
+  }
+
+  const disposition = response.headers.get('content-disposition')
+  const dispositionMatch = disposition?.match(/filename="?([^"]+)"?/i)
+
+  return dispositionMatch?.[1] ?? 'comedor-bestellliste.xlsx'
 }
 
 function confirmInventoryRemoval(productName: string) {

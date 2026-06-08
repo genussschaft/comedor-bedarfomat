@@ -36,6 +36,8 @@ jobs:
 
       - name: Build
         run: npm run build
+        env:
+          VITE_COMEDOR_PROXY_URL: ${{ vars.VITE_COMEDOR_PROXY_URL }}
 
       - name: Setup Pages
         uses: actions/configure-pages@v6

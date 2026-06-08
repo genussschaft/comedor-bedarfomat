@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "comedor-bedarfomat-proxy",
+  "main": "worker/comedor-proxy.ts",
+  "compatibility_date": "2026-05-03",
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "ENVIRONMENT": "production",
+    "ALLOWED_ORIGINS": "https://genussschaft.github.io"
+  }
+}
