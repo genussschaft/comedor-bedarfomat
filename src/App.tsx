@@ -94,6 +94,8 @@ function App() {
 
   const aktuellerInputRef = useRef<HTMLInputElement | null>(null)
   const vorherigerInputRef = useRef<HTMLInputElement | null>(null)
+  const cartPanelRef = useRef<HTMLElement | null>(null)
+  const [cartPanelSichtbar, setCartPanelSichtbar] = useState(false)
 
   const deferredSuche = useDeferredValue(appState.searchQuery)
   const deferredInventurSuche = useDeferredValue(appState.inventoryQuery)
@@ -101,6 +103,20 @@ function App() {
   useEffect(() => {
     saveAppState(appState)
   }, [appState])
+
+  // The mobile jump bar hides while the Bestellübersicht is on screen.
+  useEffect(() => {
+    const panel = cartPanelRef.current
+    if (!panel || typeof IntersectionObserver === 'undefined') {
+      return
+    }
+
+    const observer = new IntersectionObserver(([entry]) =>
+      setCartPanelSichtbar(entry.isIntersecting),
+    )
+    observer.observe(panel)
+    return () => observer.disconnect()
+  }, [])
 
   const aktuelleProdukte = appState.currentWorkbook?.products ?? []
   const vorherigeProdukte = appState.previousWorkbook?.products ?? []
@@ -1117,7 +1133,7 @@ function App() {
           )}
         </main>
 
-        <aside className="cart-panel panel">
+        <aside className="cart-panel panel" id="bestelluebersicht" ref={cartPanelRef}>
           <div className="panel-head">
             <div>
               <span className="eyebrow">Bestellübersicht</span>
@@ -1184,6 +1200,22 @@ function App() {
           </div>
         </aside>
       </div>
+
+      {appState.currentWorkbook && !cartPanelSichtbar ? (
+        <button
+          className="cart-jump"
+          type="button"
+          onClick={() =>
+            cartPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          }
+        >
+          <span>
+            Bestellung
+            {positionsAnzahl > 0 ? ` · ${positionsAnzahl} Pos. · ${formatCurrency(bestellSumme)}` : ''}
+          </span>
+          <span aria-hidden="true">↓</span>
+        </button>
+      ) : null}
     </div>
   )
 }
