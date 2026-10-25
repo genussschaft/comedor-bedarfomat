@@ -13,6 +13,7 @@
     "worker:deploy": "wrangler deploy"
   },
   "dependencies": {
+    "fflate": "^0.8.3",
     "idb-keyval": "^6.2.2",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",

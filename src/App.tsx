@@ -356,7 +356,8 @@ function App() {
         planModel.allRows.map((row) => ({
           productId: row.product.id,
           target: row.target,
-          actual: row.actual,
+          // Inventory products ordered without an Ist value have run out completely.
+          actual: row.actual ?? (row.inInventory && row.order > 0 ? 0 : null),
           order: row.order,
         })),
       )
@@ -460,6 +461,7 @@ function App() {
 
     if (parsed !== null && parsed > 0) {
       patch.lastTarget = value
+      Object.assign(patch, clampActualToTarget(row, parsed))
     } else if (!appState.inventoryDrafts[row.product.id]?.lastTarget && row.target > 0) {
       patch.lastTarget = formatNumberInput(row.target)
     }
@@ -508,12 +510,30 @@ function App() {
       target: value,
       lastTarget: value,
       inInventory: true,
+      ...clampActualToTarget(row, nextValue),
     })
   }
 
-  function nudgeIst(productId: string, currentValue: number | null, delta: number) {
-    const nextValue = roundQuantity(Math.max(0, (currentValue ?? 0) + delta))
-    setDraftValue(productId, 'actual', String(nextValue))
+  function clampActualToTarget(row: PlanRow, target: number): Partial<InventoryDraft> {
+    return row.actual !== null && row.actual > target
+      ? { actual: String(target) }
+      : {}
+  }
+
+  function setIstValue(row: PlanRow, value: string) {
+    const parsed = parseNumber(value)
+    setDraftValue(
+      row.product.id,
+      'actual',
+      parsed !== null && parsed > row.target ? String(row.target) : value,
+    )
+  }
+
+  function nudgeIst(row: PlanRow, delta: number) {
+    const nextValue = roundQuantity(
+      Math.min(row.target, Math.max(0, (row.actual ?? 0) + delta)),
+    )
+    setDraftValue(row.product.id, 'actual', String(nextValue))
   }
 
   function addProductToInventory(productId: string) {
@@ -979,11 +999,9 @@ function App() {
                         onSollBlur={() => commitInventorySollValue(row)}
                         onSollDecrease={() => nudgeInventorySoll(row, -1)}
                         onSollIncrease={() => nudgeInventorySoll(row, 1)}
-                        onIstChange={(value) =>
-                          setDraftValue(row.product.id, 'actual', value)
-                        }
-                        onIstDecrease={() => nudgeIst(row.product.id, row.actual, -1)}
-                        onIstIncrease={() => nudgeIst(row.product.id, row.actual, 1)}
+                        onIstChange={(value) => setIstValue(row, value)}
+                        onIstDecrease={() => nudgeIst(row, -1)}
+                        onIstIncrease={() => nudgeIst(row, 1)}
                         onOrderChange={(value) =>
                           setDraftValue(row.product.id, 'order', value)
                         }
@@ -2171,7 +2189,6 @@ function CartRow({ row }: { row: PlanRow }) {
       <div className="cart-row-actions">
         <span>
           x {formatQuantity(row.order)}
-          {row.actual !== null ? ` / Ist ${formatQuantity(row.actual)}` : ''}
           {row.hasOrderOverride ? ' / manuell' : ''}
         </span>
         <strong>{subtotal !== null ? formatCurrency(subtotal) : ' '}</strong>

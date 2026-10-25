@@ -1,3 +1,4 @@
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
 import * as XLSX from 'xlsx'
 import type {
   ColumnMapping,
@@ -264,8 +265,82 @@ export function exportWorkbookWithPlan(
   }
 
   const filename = `${source.baseName}-prefilled.xlsx`
-  XLSX.writeFile(workbook, filename)
+  const output = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer
+  const productRowNumbers = source.products.map((product) => product.rowNumber)
+  const highlighted =
+    productRowNumbers.length > 0
+      ? addOrderHighlight(
+          new Uint8Array(output),
+          workbook.SheetNames.indexOf(source.config.sheetName),
+          actualColumn,
+          orderColumn,
+          Math.min(...productRowNumbers),
+          Math.max(...productRowNumbers),
+        )
+      : new Uint8Array(output)
+  downloadFile(highlighted, filename)
   return filename
+}
+
+// SheetJS CE cannot write cell styles, so the yellow row highlight is added as
+// a conditional format by patching the written XML. It also follows later edits in Excel.
+function addOrderHighlight(
+  xlsx: Uint8Array,
+  sheetIndex: number,
+  lastColumn: number,
+  orderColumn: number,
+  firstRow: number,
+  lastRow: number,
+) {
+  const files = unzipSync(xlsx)
+  const sheetPath = `xl/worksheets/sheet${sheetIndex + 1}.xml`
+  const sheetXml = files[sheetPath] ? strFromU8(files[sheetPath]) : null
+  const stylesXml = files['xl/styles.xml'] ? strFromU8(files['xl/styles.xml']) : null
+
+  if (!sheetXml || !stylesXml) {
+    return xlsx
+  }
+
+  const dxfCount = Number(/<dxfs count="(\d+)"/.exec(stylesXml)?.[1] ?? 0)
+  const yellowDxf =
+    '<dxf><fill><patternFill patternType="solid"><bgColor rgb="FFFFFF00"/></patternFill></fill></dxf>'
+  const patchedStyles = stylesXml.includes('<dxfs count="0"/>')
+    ? stylesXml.replace('<dxfs count="0"/>', `<dxfs count="1">${yellowDxf}</dxfs>`)
+    : stylesXml.includes('</dxfs>')
+      ? stylesXml
+          .replace(/<dxfs count="\d+">/, `<dxfs count="${dxfCount + 1}">`)
+          .replace('</dxfs>', `${yellowDxf}</dxfs>`)
+      : stylesXml.replace(/<tableStyles|<\/styleSheet>/, (match) => `<dxfs count="1">${yellowDxf}</dxfs>${match}`)
+
+  const orderCell = `$${XLSX.utils.encode_col(orderColumn)}${firstRow}`
+  const range = `A${firstRow}:${XLSX.utils.encode_col(lastColumn)}${lastRow}`
+  const rule =
+    `<conditionalFormatting sqref="${range}">` +
+    `<cfRule type="expression" dxfId="${dxfCount}" priority="1">` +
+    `<formula>AND(ISNUMBER(${orderCell}),${orderCell}&gt;0)</formula>` +
+    '</cfRule></conditionalFormatting>'
+  // conditionalFormatting must precede these elements in the worksheet schema.
+  const insertBefore =
+    /<(dataValidations|hyperlinks|printOptions|pageMargins|pageSetup|headerFooter|rowBreaks|colBreaks|ignoredErrors|drawing|legacyDrawing|tableParts|extLst)[\s>/]|<\/worksheet>/
+  const patchedSheet = sheetXml.replace(insertBefore, (match) => `${rule}${match}`)
+
+  files['xl/styles.xml'] = strToU8(patchedStyles)
+  files[sheetPath] = strToU8(patchedSheet)
+  return zipSync(files)
+}
+
+function downloadFile(data: Uint8Array, filename: string) {
+  const blob = new Blob([data as BlobPart], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.append(link)
+  link.click()
+  link.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
 function analyzeSheet(sheetName: string, worksheet: XLSX.WorkSheet): SheetAnalysis {
