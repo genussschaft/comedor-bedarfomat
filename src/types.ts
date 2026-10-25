@@ -112,4 +112,5 @@ export interface PersistedAppState {
   inventoryQuery: string
   filters: PersistedFilters
   sortMode: SortMode
+  exportKeepIntroRows: boolean
 }

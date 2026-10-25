@@ -801,6 +801,25 @@
   overflow-wrap: anywhere;
 }
 
+.export-actions {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+}
+
+.export-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.export-option input {
+  accent-color: var(--accent);
+}
+
 .cart-footer .helper-copy,
 .cart-total span,
 .cart-total strong {

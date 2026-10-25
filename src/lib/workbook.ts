@@ -163,6 +163,7 @@ export function exportWorkbookWithPlan(
     actual: number | null
     order: number
   }>,
+  options: { keepIntroRows?: boolean } = {},
 ) {
   const workbook = XLSX.read(buffer, { type: 'array', cellFormula: true })
   const worksheet = workbook.Sheets[source.config.sheetName]
@@ -264,36 +265,254 @@ export function exportWorkbookWithPlan(
     }
   }
 
+  // Drop everything above the header so the file starts directly with the column titles.
+  const rowOffset = options.keepIntroRows ? 0 : source.config.headerRow - 1
+  if (rowOffset > 0) {
+    shiftWorksheetUp(worksheet, rowOffset)
+  }
+
+  const headerRow = source.config.headerRow - rowOffset
+  const productRowNumbers = source.products.map((product) => product.rowNumber - rowOffset)
+  const numericColumns = detectNumericColumns(
+    worksheet,
+    productRowNumbers,
+    [
+      source.config.mapping.price,
+      source.config.mapping.packSize,
+      targetColumn,
+      actualColumn,
+      orderColumn,
+      totalColumn,
+    ],
+  )
+
+  const lastRow = productRowNumbers.length > 0 ? Math.max(...productRowNumbers) : headerRow
+  const columnWidths = fitColumnWidths(worksheet, headerRow, productRowNumbers)
+  worksheet['!cols'] = columnWidths
+  worksheet['!margins'] = { left: 0.25, right: 0.25, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 }
+  setPrintNames(workbook, source.config.sheetName, headerRow, columnWidths.length - 1, lastRow)
+
   const filename = `${source.baseName}-prefilled.xlsx`
   const output = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer
-  const productRowNumbers = source.products.map((product) => product.rowNumber)
-  const highlighted =
-    productRowNumbers.length > 0
-      ? addOrderHighlight(
-          new Uint8Array(output),
-          workbook.SheetNames.indexOf(source.config.sheetName),
-          actualColumn,
-          orderColumn,
-          Math.min(...productRowNumbers),
-          Math.max(...productRowNumbers),
-        )
-      : new Uint8Array(output)
-  downloadFile(highlighted, filename)
+  const styled = addExportStyles(new Uint8Array(output), {
+    sheetIndex: workbook.SheetNames.indexOf(source.config.sheetName),
+    headerRow,
+    lastHeaderColumn: columnWidths.length - 1,
+    numericColumns,
+    lastColumn: actualColumn,
+    orderColumn,
+    firstRow: productRowNumbers.length > 0 ? Math.min(...productRowNumbers) : null,
+    lastRow,
+  })
+  downloadFile(styled, filename)
   return filename
 }
 
-// SheetJS CE cannot write cell styles, so the yellow row highlight is added as
-// a conditional format by patching the written XML. It also follows later edits in Excel.
-function addOrderHighlight(
-  xlsx: Uint8Array,
-  sheetIndex: number,
+// Approximates Excel's double-click autofit for the 8pt export font. Only the table counts,
+// so long intro texts above the header don't blow up the widths. Headers wrap, so they only
+// need room for their longest word. Empty trailing columns are left out.
+function fitColumnWidths(
+  worksheet: XLSX.WorkSheet,
+  headerRow: number,
+  productRowNumbers: number[],
+) {
+  const range = XLSX.utils.decode_range(worksheet['!ref'] ?? 'A1')
+  const cellText = (column: number, rowNumber: number) =>
+    stringifyCell(
+      worksheet[XLSX.utils.encode_cell({ c: column, r: rowNumber - 1 })] as
+        | XLSX.CellObject
+        | undefined,
+    ).trim()
+  const widths: Array<{ wch: number }> = []
+  let lastUsedColumn = -1
+
+  for (let column = 0; column <= range.e.c; column += 1) {
+    // Bold header glyphs run a bit wider than regular ones.
+    const headerWidth = Math.max(
+      0,
+      ...cellText(column, headerRow).split(/\s+/).map((word) => textWidth(word) * 1.1),
+    )
+    let contentWidth = 0
+
+    for (const rowNumber of productRowNumbers) {
+      contentWidth = Math.max(contentWidth, textWidth(cellText(column, rowNumber)))
+    }
+
+    if (headerWidth > 0 || contentWidth > 0) {
+      lastUsedColumn = column
+    }
+    widths.push({ wch: Math.ceil(Math.max(4, headerWidth, contentWidth) + 1) })
+  }
+
+  return widths.slice(0, lastUsedColumn + 1)
+}
+
+// Column widths count in digit widths; Calibri is proportional, so weigh glyphs roughly.
+function textWidth(text: string) {
+  let width = 0
+
+  for (const char of text) {
+    if (/[ilIjtfr.,:;'!|()[\] -]/.test(char)) {
+      width += 0.5
+    } else if (/[mwMW@%]/.test(char)) {
+      width += 1.4
+    } else if (/[A-Z]/.test(char)) {
+      width += 1.1
+    } else if (/[0-9]/.test(char)) {
+      width += 1
+    } else {
+      width += 0.85
+    }
+  }
+
+  return width
+}
+
+// Prints the table (plus intro rows when kept) and repeats the header row on every page.
+function setPrintNames(
+  workbook: XLSX.WorkBook,
+  sheetName: string,
+  headerRow: number,
   lastColumn: number,
-  orderColumn: number,
-  firstRow: number,
   lastRow: number,
 ) {
+  const sheetIndex = workbook.SheetNames.indexOf(sheetName)
+  const sheetRef = `'${sheetName.replace(/'/g, "''")}'`
+  const names = (workbook.Workbook?.Names ?? []).filter(
+    (name) =>
+      !(
+        (name.Name === '_xlnm.Print_Titles' || name.Name === '_xlnm.Print_Area') &&
+        name.Sheet === sheetIndex
+      ),
+  )
+
+  names.push(
+    {
+      Name: '_xlnm.Print_Area',
+      Sheet: sheetIndex,
+      Ref: `${sheetRef}!$A$1:$${XLSX.utils.encode_col(lastColumn)}$${lastRow}`,
+    },
+    {
+      Name: '_xlnm.Print_Titles',
+      Sheet: sheetIndex,
+      Ref: `${sheetRef}!$${headerRow}:$${headerRow}`,
+    },
+  )
+  workbook.Workbook = { ...workbook.Workbook, Names: names }
+}
+
+function shiftWorksheetUp(worksheet: XLSX.WorkSheet, offset: number) {
+  const cellKeys = Object.keys(worksheet).filter((key) => !key.startsWith('!'))
+  const shifted: Record<string, XLSX.CellObject> = {}
+
+  for (const key of cellKeys) {
+    const { r, c } = XLSX.utils.decode_cell(key)
+    const cell = worksheet[key] as XLSX.CellObject
+    delete worksheet[key]
+
+    if (r < offset) {
+      continue
+    }
+
+    if (cell.f) {
+      cell.f = shiftFormulaRows(cell.f, offset)
+    }
+    shifted[XLSX.utils.encode_cell({ r: r - offset, c })] = cell
+  }
+
+  Object.assign(worksheet, shifted)
+
+  if (worksheet['!ref']) {
+    const range = XLSX.utils.decode_range(worksheet['!ref'])
+    range.e.r = Math.max(0, range.e.r - offset)
+    worksheet['!ref'] = XLSX.utils.encode_range(range)
+  }
+
+  worksheet['!merges'] = (worksheet['!merges'] ?? [])
+    .filter((merge) => merge.s.r >= offset)
+    .map((merge) => ({
+      s: { r: merge.s.r - offset, c: merge.s.c },
+      e: { r: merge.e.r - offset, c: merge.e.c },
+    }))
+
+  if (worksheet['!rows']) {
+    worksheet['!rows'] = worksheet['!rows'].slice(offset)
+  }
+
+  delete worksheet['!autofilter']
+}
+
+// Moves plain A1 references up; references pointing into the removed rows clamp to row 1.
+function shiftFormulaRows(formula: string, offset: number) {
+  return formula
+    .split(/("[^"]*")/)
+    .map((part, index) =>
+      index % 2 === 1
+        ? part
+        : part.replace(
+            /(?<![A-Za-z_\d])(\$?[A-Z]{1,3})(\$?)(\d+)(?![\d(A-Za-z_])/g,
+            (_, column: string, dollar: string, row: string) =>
+              `${column}${dollar}${Math.max(1, Number(row) - offset)}`,
+          ),
+    )
+    .join('')
+}
+
+// A column counts as numeric when most filled product cells hold numbers.
+function detectNumericColumns(
+  worksheet: XLSX.WorkSheet,
+  productRowNumbers: number[],
+  knownNumeric: Array<number | undefined>,
+) {
+  const range = XLSX.utils.decode_range(worksheet['!ref'] ?? 'A1')
+  const columns = new Set(
+    knownNumeric.filter((column): column is number => column !== undefined),
+  )
+
+  for (let column = 0; column <= range.e.c; column += 1) {
+    let numbers = 0
+    let filled = 0
+
+    for (const rowNumber of productRowNumbers) {
+      const cell = worksheet[XLSX.utils.encode_cell({ c: column, r: rowNumber - 1 })] as
+        | XLSX.CellObject
+        | undefined
+      const text = stringifyCell(cell).trim()
+      if (!text) {
+        continue
+      }
+      filled += 1
+      if (cell?.t === 'n' || /^-?[\d'.,]+$/.test(text)) {
+        numbers += 1
+      }
+    }
+
+    if (filled > 0 && numbers / filled >= 0.8) {
+      columns.add(column)
+    }
+  }
+
+  return [...columns]
+}
+
+// SheetJS CE cannot write cell styles, so formatting is added by patching the written XML:
+// 8pt font everywhere, bold headers (right-aligned when numeric), landscape print setup, a tinted Bestellung column and a
+// conditional yellow highlight on ordered rows that also follows later edits in Excel.
+function addExportStyles(
+  xlsx: Uint8Array,
+  layout: {
+    sheetIndex: number
+    headerRow: number
+    lastHeaderColumn: number
+    numericColumns: number[]
+    lastColumn: number
+    orderColumn: number
+    firstRow: number | null
+    lastRow: number
+  },
+) {
   const files = unzipSync(xlsx)
-  const sheetPath = `xl/worksheets/sheet${sheetIndex + 1}.xml`
+  const sheetPath = `xl/worksheets/sheet${layout.sheetIndex + 1}.xml`
   const sheetXml = files[sheetPath] ? strFromU8(files[sheetPath]) : null
   const stylesXml = files['xl/styles.xml'] ? strFromU8(files['xl/styles.xml']) : null
 
@@ -301,28 +520,93 @@ function addOrderHighlight(
     return xlsx
   }
 
-  const dxfCount = Number(/<dxfs count="(\d+)"/.exec(stylesXml)?.[1] ?? 0)
-  const yellowDxf =
-    '<dxf><fill><patternFill patternType="solid"><bgColor rgb="FFFFFF00"/></patternFill></fill></dxf>'
-  const patchedStyles = stylesXml.includes('<dxfs count="0"/>')
-    ? stylesXml.replace('<dxfs count="0"/>', `<dxfs count="1">${yellowDxf}</dxfs>`)
-    : stylesXml.includes('</dxfs>')
-      ? stylesXml
-          .replace(/<dxfs count="\d+">/, `<dxfs count="${dxfCount + 1}">`)
-          .replace('</dxfs>', `${yellowDxf}</dxfs>`)
-      : stylesXml.replace(/<tableStyles|<\/styleSheet>/, (match) => `<dxfs count="1">${yellowDxf}</dxfs>${match}`)
+  const fontCount = Number(/<fonts count="(\d+)"/.exec(stylesXml)?.[1] ?? 0)
+  let patchedStyles = stylesXml
+    .replace(/<fonts[^>]*>[\s\S]*?<\/fonts>/, (fonts) =>
+      fonts.replace(/<sz val="[^"]*"\/>/g, '<sz val="8"/>'),
+    )
+    .replace(/<fonts count="\d+"([^>]*)>/, `<fonts count="${fontCount + 1}"$1>`)
+    .replace(
+      '</fonts>',
+      '<font><b/><sz val="8"/><color theme="1"/><name val="Calibri"/><family val="2"/>' +
+        '<scheme val="minor"/></font></fonts>',
+    )
 
-  const orderCell = `$${XLSX.utils.encode_col(orderColumn)}${firstRow}`
-  const range = `A${firstRow}:${XLSX.utils.encode_col(lastColumn)}${lastRow}`
-  const rule =
-    `<conditionalFormatting sqref="${range}">` +
-    `<cfRule type="expression" dxfId="${dxfCount}" priority="1">` +
-    `<formula>AND(ISNUMBER(${orderCell}),${orderCell}&gt;0)</formula>` +
-    '</cfRule></conditionalFormatting>'
+  // Two new cell formats for the header row: bold + wrapped, left or right-aligned.
+  const xfCount = Number(/<cellXfs count="(\d+)"/.exec(patchedStyles)?.[1] ?? 0)
+  const headerXf = xfCount
+  const numericHeaderXf = xfCount + 1
+  patchedStyles = patchedStyles
+    .replace(/<cellXfs count="\d+">/, `<cellXfs count="${xfCount + 2}">`)
+    .replace(
+      '</cellXfs>',
+      `<xf numFmtId="0" fontId="${fontCount}" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1">` +
+        '<alignment vertical="bottom" wrapText="1"/></xf>' +
+        `<xf numFmtId="0" fontId="${fontCount}" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1">` +
+        '<alignment horizontal="right" vertical="bottom" wrapText="1"/></xf></cellXfs>',
+    )
+
+  const dxfCount = Number(/<dxfs count="(\d+)"/.exec(patchedStyles)?.[1] ?? 0)
+  const fillDxf = (color: string) =>
+    `<dxf><fill><patternFill patternType="solid"><bgColor rgb="${color}"/></patternFill></fill></dxf>`
+  const newDxfs = fillDxf('FFFFFF00') + fillDxf('FFFFF2CC')
+  patchedStyles = patchedStyles.includes('<dxfs count="0"/>')
+    ? patchedStyles.replace('<dxfs count="0"/>', `<dxfs count="2">${newDxfs}</dxfs>`)
+    : patchedStyles.includes('</dxfs>')
+      ? patchedStyles
+          .replace(/<dxfs count="\d+">/, `<dxfs count="${dxfCount + 2}">`)
+          .replace('</dxfs>', `${newDxfs}</dxfs>`)
+      : patchedStyles.replace(
+          /<tableStyles|<\/styleSheet>/,
+          (match) => `<dxfs count="2">${newDxfs}</dxfs>${match}`,
+        )
+
+  let patchedSheet = sheetXml
+  for (let column = 0; column <= layout.lastHeaderColumn; column += 1) {
+    const address = XLSX.utils.encode_cell({ c: column, r: layout.headerRow - 1 })
+    const style = layout.numericColumns.includes(column) ? numericHeaderXf : headerXf
+    patchedSheet = patchedSheet.replace(
+      new RegExp(`<c r="${address}"( s="\\d+")?`),
+      `<c r="${address}" s="${style}"`,
+    )
+  }
+
+  // Landscape, scaled to one page wide; as many pages tall as needed.
+  // pageSetUpPr is the last allowed child of sheetPr.
+  patchedSheet = patchedSheet
+    .replace(/<pageSetUpPr[^>]*\/>/, '')
+    .replace(/<sheetPr([^>]*?)\/>/, '<sheetPr$1></sheetPr>')
+  patchedSheet = patchedSheet.includes('</sheetPr>')
+    ? patchedSheet.replace('</sheetPr>', '<pageSetUpPr fitToPage="1"/></sheetPr>')
+    : patchedSheet.replace('<dimension', '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension')
+  patchedSheet = patchedSheet
+    .replace(/<pageSetup[^>]*\/>/, '')
+    .replace(
+      /(<pageMargins[^>]*\/>)/,
+      '$1<pageSetup orientation="landscape" fitToWidth="1" fitToHeight="0"/>',
+    )
+
+  const orderLetter = XLSX.utils.encode_col(layout.orderColumn)
+  let rules =
+    `<conditionalFormatting sqref="${orderLetter}${layout.headerRow}:${orderLetter}${layout.lastRow}">` +
+    `<cfRule type="expression" dxfId="${dxfCount + 1}" priority="2">` +
+    '<formula>TRUE</formula></cfRule></conditionalFormatting>'
+
+  if (layout.firstRow !== null) {
+    const orderCell = `$${orderLetter}${layout.firstRow}`
+    const range = `A${layout.firstRow}:${XLSX.utils.encode_col(layout.lastColumn)}${layout.lastRow}`
+    rules =
+      `<conditionalFormatting sqref="${range}">` +
+      `<cfRule type="expression" dxfId="${dxfCount}" priority="1">` +
+      `<formula>AND(ISNUMBER(${orderCell}),${orderCell}&gt;0)</formula>` +
+      '</cfRule></conditionalFormatting>' +
+      rules
+  }
+
   // conditionalFormatting must precede these elements in the worksheet schema.
   const insertBefore =
     /<(dataValidations|hyperlinks|printOptions|pageMargins|pageSetup|headerFooter|rowBreaks|colBreaks|ignoredErrors|drawing|legacyDrawing|tableParts|extLst)[\s>/]|<\/worksheet>/
-  const patchedSheet = sheetXml.replace(insertBefore, (match) => `${rule}${match}`)
+  patchedSheet = patchedSheet.replace(insertBefore, (match) => `${rules}${match}`)
 
   files['xl/styles.xml'] = strToU8(patchedStyles)
   files[sheetPath] = strToU8(patchedSheet)

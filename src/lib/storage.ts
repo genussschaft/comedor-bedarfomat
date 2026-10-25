@@ -15,6 +15,7 @@ export function getInitialAppState(): PersistedAppState {
       producer: '',
     },
     sortMode: 'producer',
+    exportKeepIntroRows: false,
   }
 }
 

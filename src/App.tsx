@@ -360,6 +360,7 @@ function App() {
           actual: row.actual ?? (row.inInventory && row.order > 0 ? 0 : null),
           order: row.order,
         })),
+        { keepIntroRows: appState.exportKeepIntroRows },
       )
 
       setMeldung(`${filename} wurde mit Soll-, Ist- und Bestellmengen exportiert.`)
@@ -1122,14 +1123,32 @@ function App() {
               <span className="eyebrow">Bestellübersicht</span>
               <h2>Bestellung</h2>
             </div>
-            <button
-              className="button button-primary"
-              type="button"
-              onClick={() => void exportCurrentWorkbook()}
-              disabled={!appState.currentWorkbook || busyState.export}
-            >
-              {busyState.export ? 'Export läuft...' : 'Excel exportieren'}
-            </button>
+            <div className="export-actions">
+              <button
+                className="button button-primary"
+                type="button"
+                onClick={() => void exportCurrentWorkbook()}
+                disabled={!appState.currentWorkbook || busyState.export}
+              >
+                {busyState.export ? 'Export läuft...' : 'Excel exportieren'}
+              </button>
+              <label
+                  className="export-option"
+                  title="Titel und Infotext über der Kopfzeile im Export behalten"
+                >
+                <input
+                  type="checkbox"
+                  checked={appState.exportKeepIntroRows}
+                  onChange={(event) =>
+                    setAppState((previous) => ({
+                      ...previous,
+                      exportKeepIntroRows: event.target.checked,
+                    }))
+                  }
+                />
+                <span>Kopfbereich behalten</span>
+              </label>
+            </div>
           </div>
 
           <div className="cart-metrics">
